@@ -1,0 +1,37 @@
+[package]
+name = "openbarista"
+version = "0.1.0"
+edition = "2021"
+resolver = "2"
+
+[[bin]]
+name = "openbarista"
+harness = false
+
+[profile.release]
+opt-level = "s"
+
+[profile.dev]
+debug = true
+opt-level = "z"
+
+[features]
+default = ["std", "esp-idf-svc/native"]
+pio = ["esp-idf-svc/pio"]
+std = ["alloc", "esp-idf-svc/binstart", "esp-idf-svc/std", "esp-idf-hal/std"]
+alloc = ["esp-idf-svc/alloc", "esp-idf-hal/alloc"]
+nightly = ["esp-idf-svc/nightly"]
+experimental = ["esp-idf-svc/experimental"]
+
+[dependencies]
+anyhow = "1"
+embedded-hal = "1"
+esp-idf-hal = { version = "0.46", default-features = false }
+esp-idf-svc = { version = "0.52", default-features = false }
+
+[build-dependencies]
+embuild = "0.33"
+
+[package.metadata.esp-idf-sys]
+esp_idf_tools_install_dir = "global"
+esp_idf_version = "v5.4.3"
