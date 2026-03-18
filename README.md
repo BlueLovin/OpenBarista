@@ -1,47 +1,104 @@
-# OpenBarista ESP32 Telemetry in Rust
+# OpenBarista
 
-Rust firmware for an ESP32 using the ESP-IDF ecosystem. It reads:
+OpenBarista is an ESP32-based espresso telemetry and profiling firmware project written in Rust on top of ESP-IDF.
 
-- PT100 temperature through a MAX31865 over SPI
-- Pressure from an analog sensor on GPIO34
+The goal is to measure the two signals that matter most during a shot:
 
-The firmware prints one line every 500 ms over the serial console:
+- Brew temperature from a PT100 RTD probe through a MAX31865 interface board
+- Brew pressure from an analog pressure transducer connected to the ESP32 ADC
+
+The firmware streams those readings over the serial console every 500 ms so the machine can be profiled, calibrated, and monitored while testing hardware changes.
+
+## What this repository is
+
+This repo contains the embedded firmware, build scripts, and toolchain setup needed to run the telemetry stack on an ESP32.
+
+It is not a desktop dashboard or data logger by itself. Its current job is to:
+
+- initialize the SPI temperature interface
+- sample the pressure sensor through ADC1
+- convert raw sensor data into Celsius, PSI, and bar
+- print telemetry to the serial monitor in a stable loop
+
+Current serial output format:
 
 ```text
-Temp: XX.XX C | Pressure: X.XX bar | Pressure (PSI): XX.XX | RawADC: XXXX | Volt: X.XX
+Temp: 93.42 C | Pressure: 8.74 bar | Pressure (PSI): 126.79
 ```
 
-## Quick start
+## Project goal
 
-This repo is now set up for a two-command workflow:
+The practical goal of OpenBarista is espresso profiling.
 
-```sh
-bash scripts/bootstrap.sh
-bash scripts/flash.sh
-```
+That means giving you a repeatable live view of:
 
-What that does:
+- whether the brew water is near the target temperature
+- how fast pressure builds
+- what peak pressure the system reaches
+- whether hardware or control changes improve shot consistency
 
-- `scripts/bootstrap.sh` installs the Rust-side tooling you actually need, with the locked versions that work with your current Rust toolchain.
-- `scripts/bootstrap.sh` also installs the Espressif toolchain with `espup` and generates a repo-local environment file at `.esp/export-esp.sh`.
-- `scripts/flash.sh` sources `.esp/export-esp.sh`, builds the firmware, flashes the board, and opens the serial monitor through the configured Cargo runner.
+This firmware is the sensor and telemetry layer for that work.
 
-If you only want to compile without flashing:
+## Hardware
 
-```sh
-bash scripts/build.sh
-```
+The project is currently set up for the following hardware arrangement.
 
-## Project layout
+### Core controller
+
+- ESP32
+
+### Temperature path
+
+- PT100 RTD temperature probe
+- MAX31865 RTD-to-digital amplifier board
+- 3-wire RTD configuration
+
+Configuration used by the firmware:
+
+- PT100 nominal resistance: 100.0 ohm
+- Reference resistor: 430.0 ohm
+- Calibration offset: +4.0 C
+- SPI mode: 1
+
+ESP32 pin mapping for the MAX31865:
+
+- CS: GPIO5
+- SCLK: GPIO18
+- MOSI: GPIO23
+- MISO: GPIO19
+
+### Pressure path
+
+- Analog pressure sensor / pressure transducer
+- Sensor output connected to ESP32 GPIO34
+- ADC1 one-shot mode
+- 12 dB attenuation
+
+Pressure conversion model used in firmware:
+
+- Raw ADC range: 0..4095
+- Voltage calculation: `raw / 4095.0 * 3.3`
+- 0 PSI reference voltage: 0.35 V
+- Full-scale pressure: 200 PSI
+- Full-scale sensor voltage used in conversion: 4.5 V
+- PSI to bar conversion: `1 PSI = 0.0689476 bar`
+
+Important electrical constraint:
+
+The ESP32 ADC input must not be driven above 3.3 V. If the pressure sensor can output more than 3.3 V, you need external scaling or signal conditioning before feeding GPIO34.
+
+## Repository layout
 
 ```text
 .
-├── .cargo/
-│   └── config.toml
 ├── build.rs
 ├── Cargo.toml
 ├── rust-toolchain.toml
 ├── README.md
+├── scripts/
+│   ├── bootstrap.sh
+│   ├── build.sh
+│   └── flash.sh
 └── src/
     ├── main.rs
     └── sensors/
@@ -50,38 +107,29 @@ bash scripts/build.sh
         └── temperature.rs
 ```
 
-## Hardware mapping
+Key files:
 
-### MAX31865
+- `src/main.rs`: board setup, sensor initialization, main telemetry loop
+- `src/sensors/temperature.rs`: MAX31865 driver and PT100 temperature conversion
+- `src/sensors/pressure.rs`: ADC pressure sampling and PSI/bar conversion
+- `scripts/bootstrap.sh`: installs the required Rust and Espressif tooling
+- `scripts/build.sh`: builds the firmware
+- `scripts/flash.sh`: flashes the board and opens the serial monitor
 
-- CS: GPIO5
-- SCLK: GPIO18
-- MISO: GPIO19
-- MOSI: GPIO23
-- SPI mode: 1
-- PT100 nominal resistance: 100.0 ohm
-- Reference resistor: 430.0 ohm
-- Wiring mode: 3-wire
-- Software calibration offset: +4.0 C
+## Software stack
 
-### Pressure sensor
+- Rust
+- ESP-IDF
+- `esp-idf-hal`
+- `esp-idf-svc`
+- `espflash`
+- `espup`
 
-- ADC pin: GPIO34
-- ADC mode: one-shot
-- Attenuation: 12 dB
-- Conversion assumptions:
-  - 12-bit raw range: 0..4095
-  - voltage derived directly from raw ADC counts using 3.3 V reference
-  - 0 PSI = 0.35 V
-  - 200 PSI = 4.5 V
-
-## Important electrical note
-
-The ESP32 ADC pin must never see more than 3.3 V. If your pressure sensor can really output up to 4.5 V, you need external scaling or conditioning before GPIO34. The code still applies the conversion formula you requested to the measured voltage.
+The project target is configured for ESP32 with `xtensa-esp32-espidf`.
 
 ## Prerequisites
 
-You need the normal system build tools installed first. The helper script handles the Rust and Espressif-specific setup, but it does not use `apt`, `pacman`, or `dnf` for you.
+Install the normal system dependencies first. The repo scripts handle the Rust and Espressif-specific setup, but they do not install OS packages for you.
 
 Debian or Ubuntu:
 
@@ -95,54 +143,100 @@ Arch Linux:
 sudo pacman -S --needed git wget flex bison gperf python python-pip cmake ninja ccache libffi openssl dfu-util libusb base-devel pkgconf
 ```
 
-After that, use the repo bootstrap command instead of manually running `cargo install` lines from memory.
+You also need a working Rust installation with `cargo` and `rustup` available.
 
-## Install flow details
+## Setup
 
-`scripts/bootstrap.sh` intentionally does these steps in a safe order:
+From the repository root:
+
+```sh
+bash scripts/bootstrap.sh
+```
+
+What the bootstrap script does:
 
 - ensures `~/.cargo/bin` is on your shell `PATH`
-- installs `espup` with `cargo +stable install --locked espup`
-- runs `espup install --targets esp32 --std --export-file "$PWD/.esp/export-esp.sh"`
-- installs `ldproxy`, `espflash`, and `cargo-espflash` with `cargo install --locked ...`
+- installs `espup` if it is missing
+- installs the Espressif Rust toolchain named `esp`
+- writes a repo-local environment file at `.esp/export-esp.sh`
+- installs `ldproxy`, `espflash`, and `cargo-espflash`
 
-The `--locked` part matters. Without it, crates like `espflash` can pull newer dependencies that require a newer `rustc` than the one you currently have, which is exactly the failure you hit.
-
-The project is configured for ESP32 with target `xtensa-esp32-espidf` in `.cargo/config.toml`.
+After bootstrap, open a new shell or source your shell rc file if the script updated your `PATH`.
 
 ## Build
 
-From the project root:
+To compile the firmware only:
 
 ```sh
 bash scripts/build.sh
 ```
 
-## Flash
+That script:
 
-Build, flash, and open the serial monitor in one step:
+- loads `.esp/export-esp.sh`
+- selects the ESP toolchain environment
+- runs `cargo build`
+
+## Flash and monitor
+
+To build, flash, and open the serial monitor:
 
 ```sh
 bash scripts/flash.sh
 ```
 
-If you want to run the raw commands yourself, the equivalent is:
+That script:
+
+- loads `.esp/export-esp.sh`
+- runs `cargo run`
+
+The Cargo runner is configured to flash the board and attach a serial monitor, so this is the normal development workflow.
+
+## Firmware behavior
+
+On each loop iteration, the firmware:
+
+- reads the PT100 through the MAX31865 over SPI
+- applies the configured temperature calibration offset
+- reads the pressure sensor from ADC1 on GPIO34
+- converts the pressure reading into PSI and bar
+- prints one telemetry line over serial
+- waits 500 ms before the next sample
+
+## Notes on calibration
+
+Current calibration and conversion values are hard-coded in the firmware.
+
+Temperature:
+
+- PT100 nominal resistance: 100.0 ohm
+- Reference resistor: 430.0 ohm
+- Offset: +4.0 C
+
+Pressure:
+
+- zero-voltage offset: 0.35 V
+- full-scale voltage: 4.5 V
+- full-scale pressure: 200 PSI
+
+If your hardware changes, update the values in the sensor modules before treating the readings as authoritative.
+
+## Development workflow summary
+
+Typical first-time setup:
 
 ```sh
-source .esp/export-esp.sh
-cargo run
+bash scripts/bootstrap.sh
+bash scripts/flash.sh
 ```
 
-## Behavior summary
+Typical edit-build-test cycle after setup:
 
-- Temperature is read from the MAX31865 in one-shot mode.
-- RTD resistance is converted to Celsius with the standard PT100 formula.
-- A +4.0 C calibration offset is applied.
-- Pressure is sampled from ADC1/GPIO34.
-- Pressure voltage is computed the same way as the working Arduino sketch: `raw / 4095.0 * 3.3`.
-- Negative PSI results are clamped to 0.
-- Pressure is also converted to bar using `1 PSI = 0.0689476 bar`.
+```sh
+bash scripts/build.sh
+bash scripts/flash.sh
+```
 
-## If you need different pins
+## Current scope
 
-Update the pin selections in `src/main.rs` to match your wiring. Only `GPIO5` and `GPIO34` were fixed by your requirements; the SPI bus pins use the common ESP32 defaults in this project.
+This repository currently focuses on embedded acquisition and live telemetry. If you later add logging, networking, shot storage, or a UI, those would sit on top of the firmware provided here.
