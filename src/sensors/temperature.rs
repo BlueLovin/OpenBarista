@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use embedded_hal::spi::SpiDevice;
+use openbarista::telemetry_math::{resistance_from_raw, temperature_c_from_raw};
 
 const CONFIG_REG: u8 = 0x00;
 const CONFIG_BIAS: u8 = 0x80;
@@ -10,9 +11,6 @@ const CONFIG_1SHOT: u8 = 0x20;
 const CONFIG_3WIRE: u8 = 0x10;
 const CONFIG_FAULTSTAT: u8 = 0x02;
 const RTD_MSB_REG: u8 = 0x01;
-
-const RTD_A: f32 = 3.9083e-3;
-const RTD_B: f32 = -5.775e-7;
 
 #[derive(Debug, Clone, Copy)]
 pub struct TemperatureReading {
@@ -56,8 +54,9 @@ where
 
     pub fn read_temperature_c(&mut self) -> Result<TemperatureReading> {
         let raw_code = self.read_rtd()?;
-        let resistance_ohms = raw_code as f32 * self.ref_resistor / 32_768.0;
-        let temperature_c = self.calculate_temperature(raw_code) + self.calibration_offset_c;
+        let resistance_ohms = resistance_from_raw(raw_code, self.ref_resistor);
+        let temperature_c =
+            self.calculate_temperature(raw_code) + self.calibration_offset_c;
 
         Ok(TemperatureReading {
             raw_code,
@@ -92,37 +91,7 @@ where
     }
 
     fn calculate_temperature(&self, raw_code: u16) -> f32 {
-        let mut resistance = raw_code as f32;
-        resistance /= 32_768.0;
-        resistance *= self.ref_resistor;
-
-        let z1 = -RTD_A;
-        let z2 = RTD_A * RTD_A - (4.0 * RTD_B);
-        let z3 = (4.0 * RTD_B) / self.nominal_resistance;
-        let z4 = 2.0 * RTD_B;
-
-        let temp = (z2 + (z3 * resistance)).sqrt();
-        let temp = (temp + z1) / z4;
-
-        if temp >= 0.0 {
-            return temp;
-        }
-
-        let normalized = (resistance / self.nominal_resistance) * 100.0;
-        let mut poly = normalized;
-
-        let mut negative_temp = -242.02;
-        negative_temp += 2.2228 * poly;
-        poly *= normalized;
-        negative_temp += 2.5859e-3 * poly;
-        poly *= normalized;
-        negative_temp -= 4.8260e-6 * poly;
-        poly *= normalized;
-        negative_temp -= 2.8183e-8 * poly;
-        poly *= normalized;
-        negative_temp += 1.5243e-10 * poly;
-
-        negative_temp
+        temperature_c_from_raw(raw_code, self.ref_resistor, self.nominal_resistance)
     }
 
     fn set_wire_mode(&mut self) -> Result<()> {
