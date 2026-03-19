@@ -4,59 +4,81 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>OpenBarista</title>
+    <link rel="stylesheet" href="/uplot.min.css" />
     <link rel="stylesheet" href="/station.css" />
+    <script src="/uplot.min.js" defer></script>
     <script src="/station.js" defer></script>
   </head>
   <body>
     <main class="card">
-      <h1>OpenBarista</h1>
-      <p>Device is online.</p>
-      <p>
-        Address:
-        <a
-          href="http://openbarista.local"
-          aria-label="Access OpenBarista device via mDNS hostname"
-          ><code>openbarista.local</code></a
-        >
-      </p>
-      <p>
-        Direct IP: <a href="http://{{IP_ADDR}}"><code>{{IP_ADDR}}</code></a>
-      </p>
-      <p class="tip">
-        Many operating systems support mDNS hostnames like
-        <code>openbarista.local</code>. If that address does not work on your
-        device, use the direct IP link above.
-      </p>
+      <header class="device-header">
+        <h1>&#9749; OpenBarista</h1>
+        <span id="telemetryStatus" class="badge">Connecting&hellip;</span>
+      </header>
 
-      <section class="telemetry">
-        <div class="telemetry-head">
-          <h2>Live Sensors</h2>
-          <span id="telemetryStatus" class="badge">Connecting...</span>
+      <div class="shot-controls">
+        <button id="startShotBtn" class="btn-shot">Start Shot</button>
+        <div id="shotTimer" class="shot-timer" aria-live="polite">--</div>
+        <div class="control-row">
+          <label>
+            Target profile
+            <select id="profileSelect"></select>
+          </label>
+          <label>
+            Window
+            <select id="windowSelect">
+              <option value="20">20 s</option>
+              <option value="40">40 s</option>
+              <option value="60" selected>60 s</option>
+              <option value="120">120 s</option>
+            </select>
+          </label>
         </div>
+      </div>
 
-        <div class="metrics">
-          <div class="metric">
-            <label>Temperature</label>
-            <strong id="metricTemp">--</strong>
-          </div>
-          <div class="metric">
-            <label>Pressure</label>
-            <strong id="metricBar">--</strong>
-          </div>
-          <div class="metric">
-            <label>Pressure (PSI)</label>
-            <strong id="metricPsi">--</strong>
-          </div>
+      <div class="metrics">
+        <div class="metric">
+          <label>Temperature</label>
+          <strong id="metricTemp">--</strong>
         </div>
+        <div class="metric metric-primary">
+          <label>Pressure</label>
+          <strong id="metricBar">--</strong>
+        </div>
+        <div class="metric">
+          <label>PSI</label>
+          <strong id="metricPsi">--</strong>
+        </div>
+        <div class="metric">
+          <label>Peak bar</label>
+          <strong id="metricPeakBar">--</strong>
+        </div>
+        <div class="metric">
+          <label>Avg bar</label>
+          <strong id="metricAvgBar">--</strong>
+        </div>
+      </div>
 
-        <canvas
-          id="telemetryCanvas"
-          width="500"
-          height="220"
-          aria-label="Live telemetry graph"
-        ></canvas>
-        <p class="tip">Orange line: temperature C. Blue line: pressure bar.</p>
-      </section>
+      <div id="uplotChart" role="img" aria-label="Live telemetry chart"></div>
+
+      <p class="chart-legend">
+        <span class="dot dot-blue"></span>Pressure&nbsp;(bar) &ensp;<span
+          class="dot dot-orange"
+        ></span
+        >Temperature&nbsp;(&deg;C) &ensp;<span class="dot dot-olive"></span
+        >Target profile
+      </p>
+
+      <details class="device-info">
+        <summary>Device info</summary>
+        <p>
+          mDNS:
+          <a href="http://openbarista.local"><code>openbarista.local</code></a>
+        </p>
+        <p>
+          Direct IP: <a href="http://{{IP_ADDR}}"><code>{{IP_ADDR}}</code></a>
+        </p>
+      </details>
     </main>
   </body>
 </html>

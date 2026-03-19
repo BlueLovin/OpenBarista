@@ -32,6 +32,14 @@ const STATION_JS: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/assets/station/station.js"
 ));
+const UPLOT_JS: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/assets/station/uplot.min.js"
+));
+const UPLOT_CSS: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/assets/station/uplot.min.css"
+));
 
 pub fn captive_index() -> StaticAsset {
     StaticAsset {
@@ -78,6 +86,22 @@ pub fn station_js() -> StaticAsset {
         content_type: "application/javascript; charset=utf-8",
         cache_control: "no-store",
         body: STATION_JS,
+    }
+}
+
+pub fn uplot_js() -> StaticAsset {
+    StaticAsset {
+        content_type: "application/javascript; charset=utf-8",
+        cache_control: "public, max-age=604800",
+        body: UPLOT_JS,
+    }
+}
+
+pub fn uplot_css() -> StaticAsset {
+    StaticAsset {
+        content_type: "text/css; charset=utf-8",
+        cache_control: "public, max-age=604800",
+        body: UPLOT_CSS,
     }
 }
 

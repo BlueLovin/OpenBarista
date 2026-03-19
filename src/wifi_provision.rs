@@ -53,17 +53,36 @@ const CAPTIVE_PATHS: &[&str] = &[
 
 fn response_headers<'a>(content_type: &'a str, cache_control: &'a str) -> [(&'a str, &'a str); 7] {
     [
-                ("Content-Type", content_type),
-                ("Cache-Control", cache_control),
-                ("X-Content-Type-Options", "nosniff"),
-                ("X-Frame-Options", "DENY"),
-                ("Referrer-Policy", "no-referrer"),
-                (
-                        "Content-Security-Policy",
-                        "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'",
-                ),
-                ("Permissions-Policy", "geolocation=(), microphone=(), camera=()"),
-        ]
+        ("Content-Type", content_type),
+        ("Cache-Control", cache_control),
+        ("X-Content-Type-Options", "nosniff"),
+        ("X-Frame-Options", "DENY"),
+        ("Referrer-Policy", "no-referrer"),
+        (
+            "Content-Security-Policy",
+            "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'",
+        ),
+        ("Permissions-Policy", "geolocation=(), microphone=(), camera=()"),
+    ]
+}
+
+// Station pages use uPlot which applies inline styles, so style-src allows 'unsafe-inline'.
+fn station_response_headers<'a>(
+    content_type: &'a str,
+    cache_control: &'a str,
+) -> [(&'a str, &'a str); 7] {
+    [
+        ("Content-Type", content_type),
+        ("Cache-Control", cache_control),
+        ("X-Content-Type-Options", "nosniff"),
+        ("X-Frame-Options", "DENY"),
+        ("Referrer-Policy", "no-referrer"),
+        (
+            "Content-Security-Policy",
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'self'",
+        ),
+        ("Permissions-Policy", "geolocation=(), microphone=(), camera=()"),
+    ]
 }
 
 #[derive(Clone)]
@@ -393,7 +412,7 @@ pub fn start_station_http_server(
     let mut server = EspHttpServer::new(&HttpConfig::default())?;
 
     server.fn_handler("/", Method::Get, move |req| {
-        let headers = response_headers("text/html; charset=utf-8", "no-store");
+        let headers = station_response_headers("text/html; charset=utf-8", "no-store");
         req.into_response(200, Some("OK"), &headers)?
             .write_all(html.as_bytes())?;
         Ok::<_, anyhow::Error>(())
@@ -401,7 +420,7 @@ pub fn start_station_http_server(
 
     server.fn_handler("/station.css", Method::Get, |req| {
         let asset = web_assets::station_css();
-        let headers = response_headers(asset.content_type, asset.cache_control);
+        let headers = station_response_headers(asset.content_type, asset.cache_control);
         req.into_response(200, Some("OK"), &headers)?
             .write_all(asset.body)?;
         Ok::<_, anyhow::Error>(())
@@ -409,7 +428,23 @@ pub fn start_station_http_server(
 
     server.fn_handler("/station.js", Method::Get, |req| {
         let asset = web_assets::station_js();
-        let headers = response_headers(asset.content_type, asset.cache_control);
+        let headers = station_response_headers(asset.content_type, asset.cache_control);
+        req.into_response(200, Some("OK"), &headers)?
+            .write_all(asset.body)?;
+        Ok::<_, anyhow::Error>(())
+    })?;
+
+    server.fn_handler("/uplot.min.js", Method::Get, |req| {
+        let asset = web_assets::uplot_js();
+        let headers = station_response_headers(asset.content_type, asset.cache_control);
+        req.into_response(200, Some("OK"), &headers)?
+            .write_all(asset.body)?;
+        Ok::<_, anyhow::Error>(())
+    })?;
+
+    server.fn_handler("/uplot.min.css", Method::Get, |req| {
+        let asset = web_assets::uplot_css();
+        let headers = station_response_headers(asset.content_type, asset.cache_control);
         req.into_response(200, Some("OK"), &headers)?
             .write_all(asset.body)?;
         Ok::<_, anyhow::Error>(())
