@@ -332,17 +332,23 @@ fn run_captive_portal(
     })?;
 
     server.fn_handler("/connect", Method::Post, move |mut req| {
-        let content_len = req.content_len().unwrap_or(0).min(512) as usize;
-        let mut body = vec![0u8; content_len];
-        let mut offset = 0;
-        while offset < content_len {
-            let n = req.read(&mut body[offset..])?;
+        let max_body_len = 512usize;
+        let mut body = Vec::new();
+        body.reserve(max_body_len);
+
+        loop {
+            if body.len() >= max_body_len {
+                break;
+            }
+            let mut buf = [0u8; 128];
+            let n = req.read(&mut buf)?;
             if n == 0 {
                 break;
             }
-            offset += n;
+            let remaining = max_body_len - body.len();
+            let to_copy = n.min(remaining);
+            body.extend_from_slice(&buf[..to_copy]);
         }
-        body.truncate(offset);
 
         let body_str = std::str::from_utf8(&body).unwrap_or("");
         let ssid = parse_form_field(body_str, "ssid").unwrap_or_default();
