@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>OpenBarista</title>
     <link rel="stylesheet" href="/station.css" />
+    <script src="/station.js" defer></script>
   </head>
   <body>
     <main class="card">
@@ -26,7 +27,36 @@
         <code>openbarista.local</code>. If that address does not work on your
         device, use the direct IP link above.
       </p>
-      <p>Sensor readings stream over serial logs.</p>
+
+      <section class="telemetry">
+        <div class="telemetry-head">
+          <h2>Live Sensors</h2>
+          <span id="telemetryStatus" class="badge">Connecting...</span>
+        </div>
+
+        <div class="metrics">
+          <div class="metric">
+            <label>Temperature</label>
+            <strong id="metricTemp">--</strong>
+          </div>
+          <div class="metric">
+            <label>Pressure</label>
+            <strong id="metricBar">--</strong>
+          </div>
+          <div class="metric">
+            <label>Pressure (PSI)</label>
+            <strong id="metricPsi">--</strong>
+          </div>
+        </div>
+
+        <canvas
+          id="telemetryCanvas"
+          width="500"
+          height="220"
+          aria-label="Live telemetry graph"
+        ></canvas>
+        <p class="tip">Orange line: temperature C. Blue line: pressure bar.</p>
+      </section>
     </main>
   </body>
 </html>

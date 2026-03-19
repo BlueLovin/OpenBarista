@@ -28,6 +28,10 @@ const STATION_CSS: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/assets/station/station.css"
 ));
+const STATION_JS: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/assets/station/station.js"
+));
 
 pub fn captive_index() -> StaticAsset {
     StaticAsset {
@@ -66,6 +70,14 @@ pub fn station_css() -> StaticAsset {
         content_type: "text/css; charset=utf-8",
         cache_control: "public, max-age=86400",
         body: STATION_CSS,
+    }
+}
+
+pub fn station_js() -> StaticAsset {
+    StaticAsset {
+        content_type: "application/javascript; charset=utf-8",
+        cache_control: "no-store",
+        body: STATION_JS,
     }
 }
 

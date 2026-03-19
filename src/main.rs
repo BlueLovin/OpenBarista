@@ -1,4 +1,5 @@
 mod sensors;
+mod telemetry_feed;
 mod web_assets;
 mod wifi_provision;
 
@@ -17,6 +18,7 @@ use esp_idf_svc::nvs::EspDefaultNvsPartition;
 
 use crate::sensors::pressure::PressureSensor;
 use crate::sensors::temperature::Max31865;
+use crate::telemetry_feed::SharedTelemetry;
 
 fn main() -> Result<()> {
     esp_idf_svc::sys::link_patches();
@@ -34,8 +36,10 @@ fn main() -> Result<()> {
     // Keep _wifi_stack alive for the lifetime of the program; dropping it would
     // disconnect WiFi and stop mDNS.
     let _wifi_stack = wifi_provision::setup_wifi(peripherals.modem, sysloop, nvs_partition)?;
+    let telemetry = SharedTelemetry::new();
     // Keep station-mode HTTP server alive so openbarista.local serves a page.
-    let _http_server = wifi_provision::start_station_http_server(&_wifi_stack.ip_addr)?;
+    let _http_server =
+        wifi_provision::start_station_http_server(&_wifi_stack.ip_addr, telemetry.clone())?;
     // -------------------------------------------------------------------------
 
     let spi_driver = SpiDriver::new::<spi::SPI2>(
@@ -64,6 +68,8 @@ fn main() -> Result<()> {
     loop {
         let temperature = temperature_sensor.read_temperature_c()?;
         let pressure = pressure_sensor.read()?;
+
+        telemetry.update(temperature.temperature_c, pressure.bar, pressure.psi);
 
         println!(
             "Temp: {:.2} C | Pressure: {:.2} bar | Pressure (PSI): {:.2}",

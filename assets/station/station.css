@@ -6,7 +6,7 @@ body {
 }
 
 .card {
-  max-width: 540px;
+  max-width: 640px;
   padding: 1.25rem 1.5rem;
   border-radius: 10px;
   background: #fff;
@@ -16,6 +16,12 @@ body {
 h1 {
   margin: 0 0 0.5rem 0;
   color: #b85c00;
+}
+
+h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  color: #7f3f11;
 }
 
 p {
@@ -33,4 +39,59 @@ code {
   margin-top: 1rem;
   font-size: 0.85rem;
   color: #666;
+}
+
+.telemetry {
+  margin-top: 1rem;
+  border-top: 1px solid #eadbcf;
+  padding-top: 1rem;
+}
+
+.telemetry-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+
+.badge {
+  font-size: 0.78rem;
+  background: #f1dfd2;
+  color: #7f3f11;
+  border-radius: 999px;
+  padding: 0.2rem 0.6rem;
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.metric {
+  border: 1px solid #eadbcf;
+  border-radius: 8px;
+  padding: 0.5rem 0.6rem;
+  background: #fffaf6;
+}
+
+.metric label {
+  display: block;
+  font-size: 0.72rem;
+  color: #6d5b4d;
+  margin-bottom: 0.2rem;
+}
+
+.metric strong {
+  font-size: 0.96rem;
+  color: #2b1d12;
+}
+
+#telemetryCanvas {
+  width: 100%;
+  height: auto;
+  border: 1px solid #eadbcf;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #fff 0%, #fdf6ef 100%);
 }

@@ -27,6 +27,7 @@ use esp_idf_svc::{
     },
 };
 
+use crate::telemetry_feed::SharedTelemetry;
 use crate::web_assets;
 
 const NVS_NAMESPACE: &str = "wifi";
@@ -384,7 +385,10 @@ fn run_captive_portal_on_dedicated_task(
     Err(anyhow!("Provisioning task exited unexpectedly"))
 }
 
-pub fn start_station_http_server(ip_addr: &str) -> Result<EspHttpServer<'static>> {
+pub fn start_station_http_server(
+    ip_addr: &str,
+    telemetry: SharedTelemetry,
+) -> Result<EspHttpServer<'static>> {
     let html = web_assets::station_index_html(ip_addr);
     let mut server = EspHttpServer::new(&HttpConfig::default())?;
 
@@ -400,6 +404,29 @@ pub fn start_station_http_server(ip_addr: &str) -> Result<EspHttpServer<'static>
         let headers = response_headers(asset.content_type, asset.cache_control);
         req.into_response(200, Some("OK"), &headers)?
             .write_all(asset.body)?;
+        Ok::<_, anyhow::Error>(())
+    })?;
+
+    server.fn_handler("/station.js", Method::Get, |req| {
+        let asset = web_assets::station_js();
+        let headers = response_headers(asset.content_type, asset.cache_control);
+        req.into_response(200, Some("OK"), &headers)?
+            .write_all(asset.body)?;
+        Ok::<_, anyhow::Error>(())
+    })?;
+
+    let telemetry_for_handler = telemetry.clone();
+    server.fn_handler("/api/telemetry", Method::Get, move |req| {
+        let snapshot = telemetry_for_handler.snapshot();
+        let payload = telemetry_json(
+            snapshot.seq,
+            snapshot.temperature_c,
+            snapshot.pressure_bar,
+            snapshot.pressure_psi,
+        );
+        let headers = response_headers("application/json; charset=utf-8", "no-store");
+        req.into_response(200, Some("OK"), &headers)?
+            .write_all(payload.as_bytes())?;
         Ok::<_, anyhow::Error>(())
     })?;
 
@@ -468,6 +495,13 @@ fn networks_json(items: &[String]) -> String {
     }
     out.push(']');
     out
+}
+
+fn telemetry_json(seq: u64, temperature_c: f32, pressure_bar: f32, pressure_psi: f32) -> String {
+    format!(
+        "{{\"seq\":{},\"temperature_c\":{:.3},\"pressure_bar\":{:.3},\"pressure_psi\":{:.3}}}",
+        seq, temperature_c, pressure_bar, pressure_psi
+    )
 }
 
 fn json_escape(s: &str) -> String {
