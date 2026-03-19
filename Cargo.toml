@@ -40,3 +40,9 @@ embuild = { version = "0.33", features = ["espidf"] }
 [package.metadata.esp-idf-sys]
 esp_idf_tools_install_dir = "global"
 esp_idf_version = "v5.4.3"
+
+# espressif/mdns was removed from built-in ESP-IDF components in v5.x and is
+# now a managed component. This entry tells esp-idf-sys to pull it in via the
+# IDF Component Manager and include it in the build.
+[[package.metadata.esp-idf-sys.extra_components]]
+remote_component = { name = "espressif/mdns", version = ">=1.0" }

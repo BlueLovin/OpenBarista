@@ -7,9 +7,11 @@ use std::{
 };
 
 use anyhow::{anyhow, Result};
-use embedded_svc::ipv4::{self, Ipv4Addr, Mask, Subnet};
 use embedded_svc::http::Headers;
+use embedded_svc::ipv4::{self, Ipv4Addr, Mask, Subnet};
 use esp_idf_hal::modem::Modem;
+#[cfg(any(esp_idf_comp_mdns_enabled, esp_idf_comp_espressif__mdns_enabled))]
+use esp_idf_svc::mdns::EspMdns;
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
     http::{
@@ -24,8 +26,6 @@ use esp_idf_svc::{
         Configuration as WifiConfig, EspWifi, WifiDriver,
     },
 };
-#[cfg(any(esp_idf_comp_mdns_enabled, esp_idf_comp_espressif__mdns_enabled))]
-use esp_idf_svc::mdns::EspMdns;
 
 const NVS_NAMESPACE: &str = "wifi";
 const NVS_SSID_KEY: &str = "ssid";
@@ -33,6 +33,7 @@ const NVS_PASS_KEY: &str = "pass";
 
 const AP_SSID: &str = "OpenBarista";
 const AP_GATEWAY: Ipv4Addr = Ipv4Addr::new(192, 168, 4, 1);
+#[cfg(any(esp_idf_comp_mdns_enabled, esp_idf_comp_espressif__mdns_enabled))]
 const MDNS_HOSTNAME: &str = "openbarista";
 const PROVISION_TASK_STACK_SIZE: usize = 32 * 1024;
 
@@ -210,11 +211,44 @@ const SUCCESS_HTML: &str = r#"<!DOCTYPE html>
 </body>
 </html>"#;
 
+fn station_status_html(ip: &str) -> String {
+    format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenBarista</title>
+  <style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 2rem; background: #faf7f3; color: #2b1d12; }}
+    .card {{ max-width: 520px; padding: 1.25rem 1.5rem; border-radius: 10px; background: #fff; border: 1px solid #eadbcf; }}
+    h1 {{ margin: 0 0 0.5rem 0; color: #b85c00; }}
+    p {{ margin: 0.4rem 0; line-height: 1.5; }}
+    code {{ background: #f4ece5; border-radius: 4px; padding: 0.1rem 0.35rem; }}
+    .tip {{ margin-top: 1rem; font-size: 0.85rem; color: #888; }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>&#9749; OpenBarista</h1>
+    <p>Device is online.</p>
+    <p>Address: <a href="http://openbarista.local"><code>openbarista.local</code></a></p>
+    <p>Direct IP: <a href="http://{ip}"><code>{ip}</code></a></p>
+    <p class="tip">
+      <code>openbarista.local</code> works on iOS, macOS, and Windows 10+.<br>
+      Android users: use the direct IP link above.
+    </p>
+    <p>Sensor readings stream over serial logs.</p>
+  </div>
+</body>
+</html>"#,
+        ip = ip
+    )
+}
+
 #[derive(Clone)]
 enum ProvisionStatus {
     Idle,
-    Validating,
-    Failed(String),
     Rebooting,
 }
 
@@ -223,7 +257,10 @@ enum ProvisionStatus {
 pub struct WifiStack {
     #[allow(dead_code)]
     pub wifi: BlockingWifi<EspWifi<'static>>,
+    /// Station-mode IP address as a string (e.g. "192.168.1.42").
+    pub ip_addr: String,
     #[cfg(any(esp_idf_comp_mdns_enabled, esp_idf_comp_espressif__mdns_enabled))]
+    #[allow(dead_code)]
     pub mdns: EspMdns,
 }
 
@@ -251,7 +288,22 @@ pub fn setup_wifi(
     let mut wifi = BlockingWifi::wrap(esp_wifi, sysloop)?;
 
     if let (Some(ssid), Some(pass)) = (saved_ssid, saved_pass) {
-        println!("[wifi] Saved credentials found for '{}'. Connecting...", ssid);
+        println!(
+            "[wifi] Saved credentials for '{}'. Scanning to detect auth method...",
+            ssid
+        );
+
+        // Start briefly in STA mode with no target SSID just to scan, so we
+        // can use the exact auth method the AP advertises.
+        wifi.set_configuration(&WifiConfig::Client(ClientConfiguration::default()))?;
+        wifi.start()?;
+        let auth = if pass.is_empty() {
+            AuthMethod::None
+        } else {
+            scan_for_auth(&mut wifi, &ssid)
+        };
+        wifi.stop()?;
+        println!("[wifi] Connecting to '{}' with auth {:?}...", ssid, auth);
 
         let h_ssid = ssid
             .as_str()
@@ -261,11 +313,6 @@ pub fn setup_wifi(
             .as_str()
             .try_into()
             .map_err(|_| anyhow!("Saved password is too long (max 64 chars)"))?;
-        let auth = if pass.is_empty() {
-            AuthMethod::None
-        } else {
-            AuthMethod::WPA2Personal
-        };
 
         wifi.set_configuration(&WifiConfig::Client(ClientConfiguration {
             ssid: h_ssid,
@@ -277,11 +324,16 @@ pub fn setup_wifi(
 
         if try_connect(&mut wifi, &ssid) {
             wifi.wait_netif_up()?;
-            println!("[wifi] Connected. Advertising as {MDNS_HOSTNAME}.local ...");
+            let ip = wifi.wifi().sta_netif().get_ip_info()?.ip;
+            println!(
+                "[wifi] Connected to '{}'. IP: {} | http://openbarista.local | http://{}",
+                ssid, ip, ip
+            );
             #[cfg(any(esp_idf_comp_mdns_enabled, esp_idf_comp_espressif__mdns_enabled))]
             let mdns = start_mdns()?;
             return Ok(WifiStack {
                 wifi,
+                ip_addr: ip.to_string(),
                 #[cfg(any(esp_idf_comp_mdns_enabled, esp_idf_comp_espressif__mdns_enabled))]
                 mdns,
             });
@@ -375,9 +427,6 @@ fn run_captive_portal(
     );
 
     // Credentials shared between the POST handler task and our polling loop.
-    let credentials: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
-    let creds_for_handler = credentials.clone();
-
     // Nearby SSIDs cache for the setup page.
     let networks_cache: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let networks_for_handler = networks_cache.clone();
@@ -386,6 +435,8 @@ fn run_captive_portal(
 
     let status: Arc<Mutex<ProvisionStatus>> = Arc::new(Mutex::new(ProvisionStatus::Idle));
     let status_for_handler = status.clone();
+    // Move NVS partition into the POST handler so it can save directly.
+    let nvs_for_handler = nvs_partition;
 
     let server_config = HttpConfig {
         stack_size: 10240,
@@ -432,77 +483,31 @@ fn run_captive_portal(
                 b"<html><body><p>SSID cannot be empty.</p><a href='/'>Go back</a></body></html>",
             )?;
         } else {
-            *creds_for_handler.lock().unwrap() = Some((ssid, pass));
-
-            {
-                let mut state = status_for_handler.lock().unwrap();
-                *state = ProvisionStatus::Validating;
-            }
-
-            // Wait for validation to finish before responding.
-            let mut response = String::from(
-                "<html><body><p>Validating WiFi credentials...</p><p>Please wait.</p></body></html>",
-            );
-            for _ in 0..250 {
-                thread::sleep(Duration::from_millis(100));
-                let state = status_for_handler.lock().unwrap().clone();
-                match state {
-                    ProvisionStatus::Validating | ProvisionStatus::Idle => {}
-                    ProvisionStatus::Rebooting => {
-                        response = SUCCESS_HTML.to_owned();
-                        break;
-                    }
-                    ProvisionStatus::Failed(message) => {
-                        response = error_html(&message);
-                        break;
-                    }
-                }
-            }
-
-            req.into_ok_response()?.write_all(response.as_bytes())?;
+            let nvs = EspNvs::new(nvs_for_handler.clone(), NVS_NAMESPACE, true)?;
+            nvs.set_str(NVS_SSID_KEY, &ssid)?;
+            nvs.set_str(NVS_PASS_KEY, &pass)?;
+            println!("[wifi] Credentials for '{}' saved. Rebooting...", ssid);
+            req.into_ok_response()?.write_all(SUCCESS_HTML.as_bytes())?;
+            *status_for_handler.lock().unwrap() = ProvisionStatus::Rebooting;
         }
 
         Ok::<_, anyhow::Error>(())
     })?;
 
-    // Poll for submitted credentials, then save and restart.
+    // Poll loop: refresh nearby SSIDs and reboot once credentials are saved.
     loop {
         thread::sleep(Duration::from_millis(100));
 
-        let validating = matches!(*status.lock().unwrap(), ProvisionStatus::Validating);
-        if !validating && *scan_requested.lock().unwrap() {
-            *scan_requested.lock().unwrap() = false;
-            refresh_network_cache(&mut wifi, &networks_cache);
+        if matches!(*status.lock().unwrap(), ProvisionStatus::Rebooting) {
+            // Give the HTTP response enough time to flush before restarting.
+            thread::sleep(Duration::from_millis(1500));
+            drop(server);
+            unsafe { esp_idf_svc::sys::esp_restart() };
         }
 
-        if let Some((ssid, pass)) = credentials.lock().unwrap().take() {
-            println!("[wifi] Credentials received for '{}'. Validating...", ssid);
-
-            let is_valid = validate_station_credentials(&mut wifi, &ap_config, &ssid, &pass);
-            if !is_valid {
-                println!("[wifi] Credentials failed for '{}'.", ssid);
-                *status.lock().unwrap() = ProvisionStatus::Failed(
-                    "Could not connect to that network. Check SSID/password and try again."
-                        .to_owned(),
-                );
-                restore_portal_mode(&mut wifi, &ap_config)?;
-                continue;
-            }
-
-            println!("[wifi] Credentials valid for '{}'. Saving to NVS...", ssid);
-            *status.lock().unwrap() = ProvisionStatus::Rebooting;
-
-            let nvs = EspNvs::new(nvs_partition.clone(), NVS_NAMESPACE, true)?;
-            nvs.set_str(NVS_SSID_KEY, &ssid)?;
-            nvs.set_str(NVS_PASS_KEY, &pass)?;
-            drop(nvs);
-            drop(server);
-
-            // Give the HTTP response a moment to fully transmit before restart.
-            thread::sleep(Duration::from_millis(500));
-
-            println!("[wifi] Restarting device...");
-            unsafe { esp_idf_svc::sys::esp_restart() };
+        if *scan_requested.lock().unwrap() {
+            *scan_requested.lock().unwrap() = false;
+            refresh_network_cache(&mut wifi, &networks_cache);
         }
     }
 }
@@ -532,70 +537,49 @@ fn run_captive_portal_on_dedicated_task(
     Err(anyhow!("Provisioning task exited unexpectedly"))
 }
 
-fn validate_station_credentials(
-    wifi: &mut BlockingWifi<EspWifi<'static>>,
-    ap_config: &AccessPointConfiguration,
-    ssid: &str,
-    pass: &str,
-) -> bool {
-    let auth = if pass.is_empty() {
-        AuthMethod::None
-    } else {
-        AuthMethod::WPA2Personal
-    };
+pub fn start_station_http_server(ip_addr: &str) -> Result<EspHttpServer<'static>> {
+    let html = station_status_html(ip_addr);
+    let mut server = EspHttpServer::new(&HttpConfig::default())?;
 
-    for attempt in 1..=3 {
-        println!("[wifi] Validation attempt {attempt}/3 for '{ssid}'");
-        let _ = wifi.stop();
+    server.fn_handler("/", Method::Get, move |req| {
+        req.into_ok_response()?.write_all(html.as_bytes())?;
+        Ok::<_, anyhow::Error>(())
+    })?;
 
-        if wifi
-            .set_configuration(&WifiConfig::Mixed(
-                ClientConfiguration {
-                    ssid: match ssid.try_into() {
-                        Ok(v) => v,
-                        Err(_) => return false,
-                    },
-                    password: match pass.try_into() {
-                        Ok(v) => v,
-                        Err(_) => return false,
-                    },
-                    auth_method: auth,
-                    ..Default::default()
-                },
-                ap_config.clone(),
-            ))
-            .is_err()
-        {
-            continue;
+    server.fn_handler("/health", Method::Get, |req| {
+        req.into_ok_response()?.write_all(b"ok")?;
+        Ok::<_, anyhow::Error>(())
+    })?;
+
+    Ok(server)
+}
+
+/// Scans visible networks and returns the auth method advertised by
+/// `target_ssid`. Falls back to `WPA2WPA3Personal` if not found.
+fn scan_for_auth(wifi: &mut BlockingWifi<EspWifi<'static>>, target_ssid: &str) -> AuthMethod {
+    match wifi.scan_n::<32>() {
+        Ok((found, _)) => {
+            for ap in found {
+                if ap.ssid.as_str().eq_ignore_ascii_case(target_ssid) {
+                    let auth = ap.auth_method.unwrap_or(AuthMethod::WPA2WPA3Personal);
+                    println!("[wifi] Scan: '{}' uses auth {:?}", target_ssid, auth);
+                    return auth;
+                }
+            }
+            println!(
+                "[wifi] '{}' not in scan, defaulting to WPA2WPA3Personal",
+                target_ssid
+            );
         }
-        if wifi.start().is_err() {
-            continue;
-        }
-
-        if wifi.connect().is_ok() && wifi.wait_netif_up().is_ok() {
-            return true;
-        }
-
-        thread::sleep(Duration::from_secs(2));
+        Err(e) => println!("[wifi] Scan error: {e:?}"),
     }
-
-    false
+    AuthMethod::WPA2WPA3Personal
 }
 
-fn restore_portal_mode(
+fn refresh_network_cache(
     wifi: &mut BlockingWifi<EspWifi<'static>>,
-    ap_config: &AccessPointConfiguration,
-) -> Result<()> {
-    let _ = wifi.stop();
-    wifi.set_configuration(&WifiConfig::Mixed(
-        ClientConfiguration::default(),
-        ap_config.clone(),
-    ))?;
-    wifi.start()?;
-    Ok(())
-}
-
-fn refresh_network_cache(wifi: &mut BlockingWifi<EspWifi<'static>>, cache: &Arc<Mutex<Vec<String>>>) {
+    cache: &Arc<Mutex<Vec<String>>>,
+) {
     match wifi.scan_n::<16>() {
         Ok((found, _total)) => {
             let mut names: Vec<String> = found
@@ -643,13 +627,6 @@ fn json_escape(s: &str) -> String {
     out
 }
 
-fn error_html(message: &str) -> String {
-    format!(
-        "<html><body><h3>Connection failed</h3><p>{}</p><p><a href='/'>Try again</a></p></body></html>",
-        message
-    )
-}
-
 fn create_softap_netif(ap_gateway: Ipv4Addr) -> Result<EspNetif> {
     let mut ap_netif_conf = NetifConfiguration::wifi_default_router();
     ap_netif_conf.ip_configuration = Some(ipv4::Configuration::Router(ipv4::RouterConfiguration {
@@ -683,8 +660,7 @@ fn start_captive_dns(ap_gateway: Ipv4Addr) -> Result<thread::JoinHandle<()>> {
                         let _ = socket.send_to(&reply, peer);
                     }
                 }
-                Err(err) if matches!(err.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
-                }
+                Err(err) if matches!(err.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
                 Err(err) => {
                     println!("[wifi] Captive DNS stopped: {err}");
                     break;

@@ -10,3 +10,7 @@ build-std = ["std", "panic_abort"]
 
 [env]
 MCU = "esp32"
+# Enable the IDF Component Manager so that managed components (e.g.
+# espressif/mdns) declared in main/idf_component.yml are downloaded and
+# included in the build.
+ESP_IDF_COMPONENT_MANAGER = "true"

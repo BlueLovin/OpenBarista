@@ -32,8 +32,9 @@ fn main() -> Result<()> {
     let nvs_partition = EspDefaultNvsPartition::take()?;
     // Keep _wifi_stack alive for the lifetime of the program; dropping it would
     // disconnect WiFi and stop mDNS.
-    let _wifi_stack =
-        wifi_provision::setup_wifi(peripherals.modem, sysloop, nvs_partition)?;
+    let _wifi_stack = wifi_provision::setup_wifi(peripherals.modem, sysloop, nvs_partition)?;
+    // Keep station-mode HTTP server alive so openbarista.local serves a page.
+    let _http_server = wifi_provision::start_station_http_server(&_wifi_stack.ip_addr)?;
     // -------------------------------------------------------------------------
 
     let spi_driver = SpiDriver::new::<spi::SPI2>(
