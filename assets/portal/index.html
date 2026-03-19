@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenBarista Setup</title>
+    <link rel="stylesheet" href="/portal.css" />
+    <script src="/portal.js" defer></script>
+  </head>
+  <body>
+    <main class="card">
+      <h1>OpenBarista</h1>
+      <p class="subtitle">Connect your device to your home WiFi network.</p>
+
+      <form method="POST" action="/connect">
+        <label for="networkSelect">Nearby Networks</label>
+        <div class="row">
+          <select id="networkSelect" aria-label="Nearby networks">
+            <option value="">Scanning...</option>
+          </select>
+          <button class="btn-secondary" type="button" id="refreshBtn">
+            Refresh
+          </button>
+        </div>
+
+        <label for="ssid">WiFi Network Name (SSID)</label>
+        <input
+          type="text"
+          id="ssid"
+          name="ssid"
+          required
+          maxlength="32"
+          autocomplete="off"
+          autocorrect="off"
+          spellcheck="false"
+        />
+        <p id="netStatus" class="status">Scanning nearby networks...</p>
+
+        <label for="password">Password</label>
+        <input
+          type="password"
+          id="password"
+          name="password"
+          maxlength="64"
+          autocomplete="off"
+        />
+        <button type="submit">Connect Device</button>
+      </form>
+    </main>
+  </body>
+</html>

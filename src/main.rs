@@ -1,4 +1,5 @@
 mod sensors;
+mod web_assets;
 mod wifi_provision;
 
 use anyhow::Result;

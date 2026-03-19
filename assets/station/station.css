@@ -1,0 +1,36 @@
+body {
+  font-family: "Segoe UI", sans-serif;
+  margin: 2rem;
+  background: #faf7f3;
+  color: #2b1d12;
+}
+
+.card {
+  max-width: 540px;
+  padding: 1.25rem 1.5rem;
+  border-radius: 10px;
+  background: #fff;
+  border: 1px solid #eadbcf;
+}
+
+h1 {
+  margin: 0 0 0.5rem 0;
+  color: #b85c00;
+}
+
+p {
+  margin: 0.45rem 0;
+  line-height: 1.5;
+}
+
+code {
+  background: #f4ece5;
+  border-radius: 4px;
+  padding: 0.1rem 0.35rem;
+}
+
+.tip {
+  margin-top: 1rem;
+  font-size: 0.85rem;
+  color: #666;
+}

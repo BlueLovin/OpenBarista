@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenBarista</title>
+    <link rel="stylesheet" href="/station.css" />
+  </head>
+  <body>
+    <main class="card">
+      <h1>OpenBarista</h1>
+      <p>Device is online.</p>
+      <p>
+        Address:
+        <a
+          href="http://openbarista.local"
+          aria-label="Access OpenBarista device via mDNS hostname"
+          ><code>openbarista.local</code></a
+        >
+      </p>
+      <p>
+        Direct IP: <a href="http://{{IP_ADDR}}"><code>{{IP_ADDR}}</code></a>
+      </p>
+      <p class="tip">
+        Many operating systems support mDNS hostnames like
+        <code>openbarista.local</code>. If that address does not work on your
+        device, use the direct IP link above.
+      </p>
+      <p>Sensor readings stream over serial logs.</p>
+    </main>
+  </body>
+</html>

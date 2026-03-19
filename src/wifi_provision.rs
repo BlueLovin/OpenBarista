@@ -27,6 +27,8 @@ use esp_idf_svc::{
     },
 };
 
+use crate::web_assets;
+
 const NVS_NAMESPACE: &str = "wifi";
 const NVS_SSID_KEY: &str = "ssid";
 const NVS_PASS_KEY: &str = "pass";
@@ -48,202 +50,19 @@ const CAPTIVE_PATHS: &[&str] = &[
     "/redirect",
 ];
 
-const PORTAL_HTML: &str = r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OpenBarista Setup</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      background: #1a0a00; min-height: 100vh;
-      display: flex; align-items: center; justify-content: center; padding: 1rem;
-    }
-    .card {
-      background: #fff; border-radius: 12px; padding: 2rem;
-      max-width: 400px; width: 100%; box-shadow: 0 8px 32px rgba(0,0,0,0.4);
-    }
-    h1 { color: #b85c00; margin-bottom: 0.25rem; font-size: 1.6rem; }
-    .subtitle { color: #666; font-size: 0.9rem; margin-bottom: 1.5rem; }
-    label { display: block; font-size: 0.85rem; font-weight: 600; color: #333; margin-bottom: 0.25rem; }
-        .row { display: flex; gap: 0.5rem; margin-bottom: 0.75rem; }
-    input {
-      width: 100%; padding: 0.65rem 0.75rem;
-      border: 1.5px solid #ddd; border-radius: 6px; font-size: 1rem; margin-bottom: 1rem;
-    }
-        select {
-            width: 100%; padding: 0.65rem 0.75rem;
-            border: 1.5px solid #ddd; border-radius: 6px; font-size: 1rem;
-            background: #fff;
-        }
-    input:focus { outline: none; border-color: #b85c00; }
-        select:focus { outline: none; border-color: #b85c00; }
-    button {
-      width: 100%; padding: 0.75rem; background: #b85c00; color: white;
-      border: none; border-radius: 6px; font-size: 1rem; font-weight: 600; cursor: pointer;
-    }
-        .btn-secondary {
-            width: auto;
-            padding: 0.6rem 0.8rem;
-            background: #eee;
-            color: #333;
-            border: 1px solid #ddd;
-            font-size: 0.85rem;
-        }
-    button:hover { background: #9a4d00; }
-        .btn-secondary:hover { background: #e5e5e5; }
-        .status {
-            font-size: 0.85rem;
-            color: #666;
-            margin-top: -0.5rem;
-            margin-bottom: 0.9rem;
-        }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <h1>&#9749; OpenBarista</h1>
-    <p class="subtitle">Connect your device to your home WiFi network.</p>
-    <form method="POST" action="/connect">
-            <label for="networkSelect">Nearby Networks</label>
-            <div class="row">
-                <select id="networkSelect" aria-label="Nearby networks">
-                    <option value="">Scanning...</option>
-                </select>
-                <button class="btn-secondary" type="button" onclick="refreshNetworks()">Refresh</button>
-            </div>
-      <label for="ssid">WiFi Network Name (SSID)</label>
-      <input type="text" id="ssid" name="ssid" required maxlength="32"
-             autocomplete="off" autocorrect="off" spellcheck="false">
-            <p id="netStatus" class="status">Scanning nearby networks...</p>
-      <label for="password">Password</label>
-      <input type="password" id="password" name="password" maxlength="64" autocomplete="off">
-      <button type="submit">Connect Device</button>
-    </form>
-  </div>
-    <script>
-        const select = document.getElementById('networkSelect');
-        const ssidInput = document.getElementById('ssid');
-        const status = document.getElementById('netStatus');
-
-        select.addEventListener('change', () => {
-            if (select.value) {
-                ssidInput.value = select.value;
-            }
-        });
-
-        async function refreshNetworks() {
-            status.textContent = 'Refreshing list...';
-            try {
-                const resp = await fetch('/networks', { cache: 'no-store' });
-                const items = JSON.parse(await resp.text());
-                select.innerHTML = '';
-
-                if (!Array.isArray(items) || items.length === 0) {
-                    const opt = document.createElement('option');
-                    opt.value = '';
-                    opt.textContent = 'No networks found';
-                    select.appendChild(opt);
-                    status.textContent = 'No networks found. You can still type SSID manually.';
-                    return;
-                }
-
-                const placeholder = document.createElement('option');
-                placeholder.value = '';
-                placeholder.textContent = 'Select a network';
-                select.appendChild(placeholder);
-
-                items.forEach((ssid) => {
-                    const opt = document.createElement('option');
-                    opt.value = ssid;
-                    opt.textContent = ssid;
-                    select.appendChild(opt);
-                });
-
-                status.textContent = `Found ${items.length} network(s).`;
-            } catch (e) {
-                status.textContent = 'Could not load networks right now. Enter SSID manually.';
-            }
-        }
-
-        refreshNetworks();
-    </script>
-</body>
-</html>"#;
-
-const SUCCESS_HTML: &str = r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OpenBarista &#8212; Connecting</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      background: #1a0a00; min-height: 100vh;
-      display: flex; align-items: center; justify-content: center; padding: 1rem;
-    }
-    .card {
-      background: #fff; border-radius: 12px; padding: 2rem;
-      max-width: 400px; width: 100%; box-shadow: 0 8px 32px rgba(0,0,0,0.4); text-align: center;
-    }
-    h1 { color: #b85c00; margin-bottom: 1rem; }
-    p { color: #444; line-height: 1.7; margin-bottom: 0.75rem; }
-    code {
-      background: #f5f0eb; padding: 0.15rem 0.4rem;
-      border-radius: 4px; font-family: monospace; color: #b85c00;
-    }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <h1>&#9749; Connecting&hellip;</h1>
-    <p>Credentials saved. The device is restarting.</p>
-    <p>
-      Reconnect your phone or laptop to your home WiFi, then visit<br>
-      <code>http://openbarista.local</code>
-    </p>
-    <p style="color:#888;font-size:0.85rem">This may take up to 30 seconds.</p>
-  </div>
-</body>
-</html>"#;
-
-fn station_status_html(ip: &str) -> String {
-    format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OpenBarista</title>
-  <style>
-    body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 2rem; background: #faf7f3; color: #2b1d12; }}
-    .card {{ max-width: 520px; padding: 1.25rem 1.5rem; border-radius: 10px; background: #fff; border: 1px solid #eadbcf; }}
-    h1 {{ margin: 0 0 0.5rem 0; color: #b85c00; }}
-    p {{ margin: 0.4rem 0; line-height: 1.5; }}
-    code {{ background: #f4ece5; border-radius: 4px; padding: 0.1rem 0.35rem; }}
-    .tip {{ margin-top: 1rem; font-size: 0.85rem; color: #888; }}
-  </style>
-</head>
-<body>
-  <div class="card">
-    <h1>&#9749; OpenBarista</h1>
-    <p>Device is online.</p>
-    <p>Address: <a href="http://openbarista.local"><code>openbarista.local</code></a></p>
-    <p>Direct IP: <a href="http://{ip}"><code>{ip}</code></a></p>
-    <p class="tip">
-      <code>openbarista.local</code> works on iOS, macOS, and Windows 10+.<br>
-      Android users: use the direct IP link above.
-    </p>
-    <p>Sensor readings stream over serial logs.</p>
-  </div>
-</body>
-</html>"#,
-        ip = ip
-    )
+fn response_headers<'a>(content_type: &'a str, cache_control: &'a str) -> [(&'a str, &'a str); 7] {
+    [
+                ("Content-Type", content_type),
+                ("Cache-Control", cache_control),
+                ("X-Content-Type-Options", "nosniff"),
+                ("X-Frame-Options", "DENY"),
+                ("Referrer-Policy", "no-referrer"),
+                (
+                        "Content-Security-Policy",
+                        "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'",
+                ),
+                ("Permissions-Policy", "geolocation=(), microphone=(), camera=()"),
+        ]
 }
 
 #[derive(Clone)]
@@ -448,16 +267,39 @@ fn run_captive_portal(
     // that phones show the "Sign in to network" prompt automatically.
     for path in CAPTIVE_PATHS {
         server.fn_handler(path, Method::Get, |req| {
-            req.into_ok_response()?.write_all(PORTAL_HTML.as_bytes())?;
+            let asset = web_assets::captive_index();
+            let headers = response_headers(asset.content_type, asset.cache_control);
+            req.into_response(200, Some("OK"), &headers)?
+                .write_all(asset.body)?;
             Ok::<_, anyhow::Error>(())
         })?;
     }
+
+    server.fn_handler("/portal.css", Method::Get, |req| {
+        let asset = web_assets::captive_static("/portal.css")
+            .ok_or_else(|| anyhow!("missing /portal.css asset"))?;
+        let headers = response_headers(asset.content_type, asset.cache_control);
+        req.into_response(200, Some("OK"), &headers)?
+            .write_all(asset.body)?;
+        Ok::<_, anyhow::Error>(())
+    })?;
+
+    server.fn_handler("/portal.js", Method::Get, |req| {
+        let asset = web_assets::captive_static("/portal.js")
+            .ok_or_else(|| anyhow!("missing /portal.js asset"))?;
+        let headers = response_headers(asset.content_type, asset.cache_control);
+        req.into_response(200, Some("OK"), &headers)?
+            .write_all(asset.body)?;
+        Ok::<_, anyhow::Error>(())
+    })?;
 
     server.fn_handler("/networks", Method::Get, move |req| {
         *scan_requested_for_handler.lock().unwrap() = true;
         let networks = networks_for_handler.lock().unwrap().clone();
         let payload = networks_json(&networks);
-        req.into_ok_response()?.write_all(payload.as_bytes())?;
+        let headers = response_headers("application/json; charset=utf-8", "no-store");
+        req.into_response(200, Some("OK"), &headers)?
+            .write_all(payload.as_bytes())?;
         Ok::<_, anyhow::Error>(())
     })?;
 
@@ -479,15 +321,20 @@ fn run_captive_portal(
         let pass = parse_form_field(body_str, "password").unwrap_or_default();
 
         if ssid.is_empty() {
-            req.into_ok_response()?.write_all(
-                b"<html><body><p>SSID cannot be empty.</p><a href='/'>Go back</a></body></html>",
-            )?;
+            let body =
+                b"<html><body><p>SSID cannot be empty.</p><a href='/'>Go back</a></body></html>";
+            let headers = response_headers("text/html; charset=utf-8", "no-store");
+            req.into_response(400, Some("Bad Request"), &headers)?
+                .write_all(body)?;
         } else {
             let nvs = EspNvs::new(nvs_for_handler.clone(), NVS_NAMESPACE, true)?;
             nvs.set_str(NVS_SSID_KEY, &ssid)?;
             nvs.set_str(NVS_PASS_KEY, &pass)?;
             println!("[wifi] Credentials for '{}' saved. Rebooting...", ssid);
-            req.into_ok_response()?.write_all(SUCCESS_HTML.as_bytes())?;
+            let success_page = web_assets::captive_success();
+            let headers = response_headers(success_page.content_type, success_page.cache_control);
+            req.into_response(200, Some("OK"), &headers)?
+                .write_all(success_page.body)?;
             *status_for_handler.lock().unwrap() = ProvisionStatus::Rebooting;
         }
 
@@ -538,16 +385,28 @@ fn run_captive_portal_on_dedicated_task(
 }
 
 pub fn start_station_http_server(ip_addr: &str) -> Result<EspHttpServer<'static>> {
-    let html = station_status_html(ip_addr);
+    let html = web_assets::station_index_html(ip_addr);
     let mut server = EspHttpServer::new(&HttpConfig::default())?;
 
     server.fn_handler("/", Method::Get, move |req| {
-        req.into_ok_response()?.write_all(html.as_bytes())?;
+        let headers = response_headers("text/html; charset=utf-8", "no-store");
+        req.into_response(200, Some("OK"), &headers)?
+            .write_all(html.as_bytes())?;
+        Ok::<_, anyhow::Error>(())
+    })?;
+
+    server.fn_handler("/station.css", Method::Get, |req| {
+        let asset = web_assets::station_css();
+        let headers = response_headers(asset.content_type, asset.cache_control);
+        req.into_response(200, Some("OK"), &headers)?
+            .write_all(asset.body)?;
         Ok::<_, anyhow::Error>(())
     })?;
 
     server.fn_handler("/health", Method::Get, |req| {
-        req.into_ok_response()?.write_all(b"ok")?;
+        let headers = response_headers("text/plain; charset=utf-8", "no-store");
+        req.into_response(200, Some("OK"), &headers)?
+            .write_all(b"ok")?;
         Ok::<_, anyhow::Error>(())
     })?;
 
