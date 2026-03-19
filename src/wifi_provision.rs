@@ -665,31 +665,38 @@ fn build_dns_reply(query: &[u8], ap_gateway: Ipv4Addr) -> Option<Vec<u8>> {
     if idx + 4 > query.len() {
         return None;
     }
+    let qtype = u16::from_be_bytes([query[idx], query[idx + 1]]);
     let question_end = idx + 4;
 
-    let mut reply = Vec::with_capacity(12 + (question_end - 12) + 16);
+    // Answer for A (1) and ANY (255); otherwise return NOERROR with ANCOUNT = 0.
+    let answer_count: u16 = if qtype == 1 || qtype == 255 { 1 } else { 0 };
+
+    let mut reply =
+        Vec::with_capacity(12 + (question_end - 12) + if answer_count == 1 { 16 } else { 0 });
     // ID
     reply.extend_from_slice(&query[0..2]);
     // Flags: standard response, recursion available false, no error
     reply.extend_from_slice(&0x8180u16.to_be_bytes());
     // QDCOUNT, ANCOUNT, NSCOUNT, ARCOUNT
     reply.extend_from_slice(&1u16.to_be_bytes());
-    reply.extend_from_slice(&1u16.to_be_bytes());
+    reply.extend_from_slice(&answer_count.to_be_bytes());
     reply.extend_from_slice(&0u16.to_be_bytes());
     reply.extend_from_slice(&0u16.to_be_bytes());
     // Original question
     reply.extend_from_slice(&query[12..question_end]);
-    // Answer name pointer to original QNAME at offset 12
-    reply.extend_from_slice(&[0xC0, 0x0C]);
-    // TYPE A, CLASS IN
-    reply.extend_from_slice(&1u16.to_be_bytes());
-    reply.extend_from_slice(&1u16.to_be_bytes());
-    // TTL 30s
-    reply.extend_from_slice(&30u32.to_be_bytes());
-    // RDLENGTH + RDATA
-    reply.extend_from_slice(&4u16.to_be_bytes());
-    reply.extend_from_slice(&ap_gateway.octets());
 
+    if answer_count == 1 {
+        // Answer name pointer to original QNAME at offset 12
+        reply.extend_from_slice(&[0xC0, 0x0C]);
+        // TYPE A, CLASS IN
+        reply.extend_from_slice(&1u16.to_be_bytes());
+        reply.extend_from_slice(&1u16.to_be_bytes());
+        // TTL 30s
+        reply.extend_from_slice(&30u32.to_be_bytes());
+        // RDLENGTH + RDATA
+        reply.extend_from_slice(&4u16.to_be_bytes());
+        reply.extend_from_slice(&ap_gateway.octets());
+    }
     Some(reply)
 }
 
