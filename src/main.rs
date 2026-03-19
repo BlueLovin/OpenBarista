@@ -1,5 +1,4 @@
 mod sensors;
-mod telemetry_feed;
 mod web_assets;
 mod wifi_provision;
 
@@ -15,10 +14,10 @@ use esp_idf_hal::spi::{SpiDeviceDriver, SpiDriver};
 use esp_idf_hal::units::FromValueType;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
+use openbarista::telemetry_feed::SharedTelemetry;
 
 use crate::sensors::pressure::PressureSensor;
 use crate::sensors::temperature::Max31865;
-use crate::telemetry_feed::SharedTelemetry;
 
 fn main() -> Result<()> {
     esp_idf_svc::sys::link_patches();

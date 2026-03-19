@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::Duration;
 use std::{
@@ -27,14 +27,16 @@ use esp_idf_svc::{
     },
 };
 
-use crate::telemetry_feed::SharedTelemetry;
 use crate::web_assets;
+use openbarista::telemetry_feed::SharedTelemetry;
 
 const NVS_NAMESPACE: &str = "wifi";
 const NVS_SSID_KEY: &str = "ssid";
 const NVS_PASS_KEY: &str = "pass";
 
 const AP_SSID: &str = "OpenBarista";
+const MAX_SSID_LEN: usize = 32;
+const MAX_PASS_LEN: usize = 64;
 const AP_GATEWAY: Ipv4Addr = Ipv4Addr::new(192, 168, 4, 1);
 #[cfg(any(esp_idf_comp_mdns_enabled, esp_idf_comp_espressif__mdns_enabled))]
 const MDNS_HOSTNAME: &str = "openbarista";
@@ -83,6 +85,13 @@ fn station_response_headers<'a>(
         ),
         ("Permissions-Policy", "geolocation=(), microphone=(), camera=()"),
     ]
+}
+
+fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
 }
 
 #[derive(Clone)]
@@ -314,8 +323,8 @@ fn run_captive_portal(
     })?;
 
     server.fn_handler("/networks", Method::Get, move |req| {
-        *scan_requested_for_handler.lock().unwrap() = true;
-        let networks = networks_for_handler.lock().unwrap().clone();
+        *lock_or_recover(&scan_requested_for_handler) = true;
+        let networks = lock_or_recover(&networks_for_handler).clone();
         let payload = networks_json(&networks);
         let headers = response_headers("application/json; charset=utf-8", "no-store");
         req.into_response(200, Some("OK"), &headers)?
@@ -346,6 +355,12 @@ fn run_captive_portal(
             let headers = response_headers("text/html; charset=utf-8", "no-store");
             req.into_response(400, Some("Bad Request"), &headers)?
                 .write_all(body)?;
+        } else if ssid.len() > MAX_SSID_LEN || pass.len() > MAX_PASS_LEN {
+            let body =
+                b"<html><body><p>SSID/password too long.</p><a href='/'>Go back</a></body></html>";
+            let headers = response_headers("text/html; charset=utf-8", "no-store");
+            req.into_response(400, Some("Bad Request"), &headers)?
+                .write_all(body)?;
         } else {
             let nvs = EspNvs::new(nvs_for_handler.clone(), NVS_NAMESPACE, true)?;
             nvs.set_str(NVS_SSID_KEY, &ssid)?;
@@ -355,7 +370,7 @@ fn run_captive_portal(
             let headers = response_headers(success_page.content_type, success_page.cache_control);
             req.into_response(200, Some("OK"), &headers)?
                 .write_all(success_page.body)?;
-            *status_for_handler.lock().unwrap() = ProvisionStatus::Rebooting;
+            *lock_or_recover(&status_for_handler) = ProvisionStatus::Rebooting;
         }
 
         Ok::<_, anyhow::Error>(())
@@ -365,15 +380,21 @@ fn run_captive_portal(
     loop {
         thread::sleep(Duration::from_millis(100));
 
-        if matches!(*status.lock().unwrap(), ProvisionStatus::Rebooting) {
+        if matches!(*lock_or_recover(&status), ProvisionStatus::Rebooting) {
             // Give the HTTP response enough time to flush before restarting.
             thread::sleep(Duration::from_millis(1500));
             drop(server);
             unsafe { esp_idf_svc::sys::esp_restart() };
         }
 
-        if *scan_requested.lock().unwrap() {
-            *scan_requested.lock().unwrap() = false;
+        let should_scan = {
+            let mut requested = lock_or_recover(&scan_requested);
+            let value = *requested;
+            *requested = false;
+            value
+        };
+
+        if should_scan {
             refresh_network_cache(&mut wifi, &networks_cache);
         }
     }
@@ -510,7 +531,7 @@ fn refresh_network_cache(
                 .collect();
             names.sort();
             names.dedup();
-            *cache.lock().unwrap() = names;
+            *lock_or_recover(cache) = names;
         }
         Err(err) => {
             println!("[wifi] Scan failed: {err:?}");
@@ -533,10 +554,22 @@ fn networks_json(items: &[String]) -> String {
 }
 
 fn telemetry_json(seq: u64, temperature_c: f32, pressure_bar: f32, pressure_psi: f32) -> String {
+    let temperature_c = sanitize_telemetry_value(temperature_c);
+    let pressure_bar = sanitize_telemetry_value(pressure_bar);
+    let pressure_psi = sanitize_telemetry_value(pressure_psi);
+
     format!(
         "{{\"seq\":{},\"temperature_c\":{:.3},\"pressure_bar\":{:.3},\"pressure_psi\":{:.3}}}",
         seq, temperature_c, pressure_bar, pressure_psi
     )
+}
+
+fn sanitize_telemetry_value(value: f32) -> f32 {
+    if value.is_finite() {
+        value
+    } else {
+        0.0
+    }
 }
 
 fn json_escape(s: &str) -> String {
