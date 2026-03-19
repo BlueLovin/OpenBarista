@@ -213,7 +213,6 @@ fn read_saved_credentials(
         .map(str::to_owned);
     let pass = nvs
         .get_str(NVS_PASS_KEY, &mut pass_buf)?
-        .filter(|s| !s.is_empty())
         .map(str::to_owned);
 
     Ok((ssid, pass))
