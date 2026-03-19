@@ -675,7 +675,7 @@ fn build_dns_reply(query: &[u8], ap_gateway: Ipv4Addr) -> Option<Vec<u8>> {
         Vec::with_capacity(12 + (question_end - 12) + if answer_count == 1 { 16 } else { 0 });
     // ID
     reply.extend_from_slice(&query[0..2]);
-    // Flags: standard response, recursion available false, no error
+    // Flags: standard response, recursion desired and available, no error (0x8180)
     reply.extend_from_slice(&0x8180u16.to_be_bytes());
     // QDCOUNT, ANCOUNT, NSCOUNT, ARCOUNT
     reply.extend_from_slice(&1u16.to_be_bytes());
