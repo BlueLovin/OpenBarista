@@ -743,3 +743,70 @@ fn url_decode(s: &str) -> String {
     }
     String::from_utf8_lossy(&bytes).into_owned()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_url_decode_plus_and_space() {
+        assert_eq!(url_decode("hello+world"), "hello world");
+        assert_eq!(url_decode("a+b+c"), "a b c");
+    }
+
+    #[test]
+    fn test_url_decode_percent_encoding() {
+        // Space
+        assert_eq!(url_decode("a%20b"), "a b");
+        // Plus sign encoded
+        assert_eq!(url_decode("a%2Bb"), "a+b");
+        // Multibyte UTF-8: "✓" (check mark, U+2713) is 0xE2 0x9C 0x93
+        assert_eq!(url_decode("%E2%9C%93"), "✓");
+    }
+
+    #[test]
+    fn test_url_decode_malformed_percent_sequences() {
+        // Lone '%' at end should be preserved
+        assert_eq!(url_decode("abc%"), "abc%");
+        // '%' with only one following char should be preserved
+        assert_eq!(url_decode("abc%2"), "abc%2");
+        // '%' followed by non-hex characters: the implementation falls back
+        // to treating '%' as a literal and then copying the rest verbatim.
+        assert_eq!(url_decode("%GZ"), "%GZ");
+        assert_eq!(url_decode("foo%XYbar"), "foo%XYbar");
+    }
+
+    #[test]
+    fn test_url_decode_non_utf8_bytes() {
+        // 0xFF is not valid UTF-8 by itself; from_utf8_lossy will replace it
+        // with U+FFFD (�).
+        assert_eq!(url_decode("%FF"), "�");
+    }
+
+    #[test]
+    fn test_parse_form_field_basic() {
+        let body = "ssid=my%20network&password=secret+pass";
+        assert_eq!(
+            parse_form_field(body, "ssid"),
+            Some("my network".to_string())
+        );
+        assert_eq!(
+            parse_form_field(body, "password"),
+            Some("secret pass".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_form_field_missing_key() {
+        let body = "ssid=myssid&password=secret";
+        assert_eq!(parse_form_field(body, "unknown"), None);
+    }
+
+    #[test]
+    fn test_parse_form_field_empty_password_for_open_network() {
+        // Models an open network configuration where password is intentionally empty.
+        let body = "ssid=open_network&password=&mode=open";
+        let password = parse_form_field(body, "password");
+        assert_eq!(password, Some(String::new()));
+    }
+}
