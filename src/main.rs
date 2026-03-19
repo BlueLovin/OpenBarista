@@ -52,6 +52,6 @@ fn main() -> Result<()> {
             temperature.temperature_c, pressure.bar, pressure.psi,
         );
 
-        FreeRtos::delay_ms(500);
+        FreeRtos::delay_ms(50);
     }
 }

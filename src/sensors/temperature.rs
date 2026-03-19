@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use embedded_hal::spi::SpiDevice;
-use openbarista::telemetry_math::{resistance_from_raw, temperature_c_from_raw};
+use openbarista::telemetry_math::temperature_c_from_raw;
 
 const CONFIG_REG: u8 = 0x00;
 const CONFIG_BIAS: u8 = 0x80;
@@ -14,8 +14,6 @@ const RTD_MSB_REG: u8 = 0x01;
 
 #[derive(Debug, Clone, Copy)]
 pub struct TemperatureReading {
-    pub raw_code: u16,
-    pub resistance_ohms: f32,
     pub temperature_c: f32,
 }
 
@@ -54,15 +52,9 @@ where
 
     pub fn read_temperature_c(&mut self) -> Result<TemperatureReading> {
         let raw_code = self.read_rtd()?;
-        let resistance_ohms = resistance_from_raw(raw_code, self.ref_resistor);
-        let temperature_c =
-            self.calculate_temperature(raw_code) + self.calibration_offset_c;
+        let temperature_c = self.calculate_temperature(raw_code) + self.calibration_offset_c;
 
-        Ok(TemperatureReading {
-            raw_code,
-            resistance_ohms,
-            temperature_c,
-        })
+        Ok(TemperatureReading { temperature_c })
     }
 
     fn initialize(&mut self) -> Result<()> {
