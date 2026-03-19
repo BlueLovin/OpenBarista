@@ -1,4 +1,5 @@
 mod sensors;
+mod wifi_provision;
 
 use anyhow::Result;
 use embedded_hal::spi::MODE_1;
@@ -10,6 +11,8 @@ use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_hal::spi;
 use esp_idf_hal::spi::{SpiDeviceDriver, SpiDriver};
 use esp_idf_hal::units::FromValueType;
+use esp_idf_svc::eventloop::EspSystemEventLoop;
+use esp_idf_svc::nvs::EspDefaultNvsPartition;
 
 use crate::sensors::pressure::PressureSensor;
 use crate::sensors::temperature::Max31865;
@@ -19,6 +22,19 @@ fn main() -> Result<()> {
 
     let peripherals = Peripherals::take()?;
     let pins = peripherals.pins;
+
+    // --- WiFi provisioning & mDNS -------------------------------------------
+    // On first boot this will start a SoftAP named "OpenBarista" and serve a
+    // captive portal at 192.168.4.1 so the user can enter their home WiFi
+    // credentials.  On subsequent boots the device connects to the saved
+    // network and advertises itself as http://openbarista.local via mDNS.
+    let sysloop = EspSystemEventLoop::take()?;
+    let nvs_partition = EspDefaultNvsPartition::take()?;
+    // Keep _wifi_stack alive for the lifetime of the program; dropping it would
+    // disconnect WiFi and stop mDNS.
+    let _wifi_stack =
+        wifi_provision::setup_wifi(peripherals.modem, sysloop, nvs_partition)?;
+    // -------------------------------------------------------------------------
 
     let spi_driver = SpiDriver::new::<spi::SPI2>(
         peripherals.spi2,

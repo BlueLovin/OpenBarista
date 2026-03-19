@@ -30,6 +30,9 @@ embedded-hal = "1"
 [target.'cfg(target_arch = "xtensa")'.dependencies]
 esp-idf-hal = { version = "0.46", default-features = false }
 esp-idf-svc = { version = "0.52", default-features = false }
+# Pinned to the exact version that esp-idf-svc 0.52 pulls in, so there is only
+# one copy of the crate in the graph and the Headers trait resolves correctly.
+embedded-svc = "=0.29.0"
 
 [build-dependencies]
 embuild = { version = "0.33", features = ["espidf"] }
