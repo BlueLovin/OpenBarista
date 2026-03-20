@@ -7,7 +7,6 @@ use std::{
 };
 
 use anyhow::{anyhow, Result};
-use embedded_svc::http::Headers;
 use embedded_svc::ipv4::{self, Ipv4Addr, Mask, Subnet};
 use esp_idf_hal::modem::Modem;
 #[cfg(any(esp_idf_comp_mdns_enabled, esp_idf_comp_espressif__mdns_enabled))]
@@ -211,9 +210,7 @@ fn read_saved_credentials(
         .get_str(NVS_SSID_KEY, &mut ssid_buf)?
         .filter(|s| !s.is_empty())
         .map(str::to_owned);
-    let pass = nvs
-        .get_str(NVS_PASS_KEY, &mut pass_buf)?
-        .map(str::to_owned);
+    let pass = nvs.get_str(NVS_PASS_KEY, &mut pass_buf)?.map(str::to_owned);
 
     Ok((ssid, pass))
 }
@@ -746,8 +743,6 @@ fn url_decode(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn test_url_decode_plus_and_space() {
         assert_eq!(url_decode("hello+world"), "hello world");

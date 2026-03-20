@@ -1,24 +1,43 @@
+#[cfg(target_arch = "xtensa")]
 mod sensors;
+#[cfg(target_arch = "xtensa")]
 mod web_assets;
+#[cfg(target_arch = "xtensa")]
 mod wifi_provision;
 
+#[cfg(target_arch = "xtensa")]
 use anyhow::Result;
+#[cfg(target_arch = "xtensa")]
 use embedded_hal::spi::MODE_1;
+#[cfg(target_arch = "xtensa")]
 use esp_idf_hal::adc::attenuation::DB_12;
+#[cfg(target_arch = "xtensa")]
 use esp_idf_hal::adc::oneshot::config::AdcChannelConfig;
+#[cfg(target_arch = "xtensa")]
 use esp_idf_hal::adc::oneshot::{AdcChannelDriver, AdcDriver};
+#[cfg(target_arch = "xtensa")]
 use esp_idf_hal::delay::FreeRtos;
+#[cfg(target_arch = "xtensa")]
 use esp_idf_hal::peripherals::Peripherals;
+#[cfg(target_arch = "xtensa")]
 use esp_idf_hal::spi;
+#[cfg(target_arch = "xtensa")]
 use esp_idf_hal::spi::{SpiDeviceDriver, SpiDriver};
+#[cfg(target_arch = "xtensa")]
 use esp_idf_hal::units::FromValueType;
+#[cfg(target_arch = "xtensa")]
 use esp_idf_svc::eventloop::EspSystemEventLoop;
+#[cfg(target_arch = "xtensa")]
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
+#[cfg(target_arch = "xtensa")]
 use openbarista::telemetry_feed::SharedTelemetry;
 
+#[cfg(target_arch = "xtensa")]
 use crate::sensors::pressure::PressureSensor;
+#[cfg(target_arch = "xtensa")]
 use crate::sensors::temperature::Max31865;
 
+#[cfg(target_arch = "xtensa")]
 fn main() -> Result<()> {
     esp_idf_svc::sys::link_patches();
 
@@ -77,4 +96,9 @@ fn main() -> Result<()> {
 
         FreeRtos::delay_ms(50);
     }
+}
+
+#[cfg(not(target_arch = "xtensa"))]
+fn main() {
+    println!("OpenBarista firmware binary is only supported on xtensa targets.");
 }

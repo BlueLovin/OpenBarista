@@ -45,4 +45,4 @@ esp_idf_version = "v5.4.3"
 # now a managed component. This entry tells esp-idf-sys to pull it in via the
 # IDF Component Manager and include it in the build.
 [[package.metadata.esp-idf-sys.extra_components]]
-remote_component = { name = "espressif/mdns", version = ">=1.0" }
+remote_component = { name = "espressif/mdns", version = ">=1.4.2" }
