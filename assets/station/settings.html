@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenBarista Settings</title>
+    <link rel="stylesheet" href="/settings.css" />
+    <script src="/settings.js" defer></script>
+  </head>
+  <body>
+    <div class="stage"></div>
+    <main class="layout">
+      <section class="panel">
+        <header class="head">
+          <div>
+            <p class="eyebrow">OpenBarista</p>
+            <h1>Device Settings</h1>
+          </div>
+          <a class="back-link" href="/">Back to Telemetry</a>
+        </header>
+
+        <p class="hint">Update local configuration and Wi-Fi credentials.</p>
+
+        <form id="deviceSettingsForm" class="settings-form">
+          <label for="deviceLabelInput">Device label</label>
+          <input
+            id="deviceLabelInput"
+            name="device_label"
+            type="text"
+            maxlength="32"
+            placeholder="Kitchen machine"
+          />
+
+          <label for="ssidInput">Wi-Fi SSID</label>
+          <input id="ssidInput" name="ssid" type="text" maxlength="32" />
+
+          <label for="passwordInput">Wi-Fi password</label>
+          <input
+            id="passwordInput"
+            name="password"
+            type="password"
+            maxlength="64"
+          />
+
+          <button id="saveSettingsBtn" type="submit">Save Settings</button>
+          <p id="settingsStatus" class="status">Loading settings...</p>
+        </form>
+
+        <div class="identity">
+          <p>
+            <strong>Build ID:</strong> <code id="buildId">{{BUILD_ID}}</code>
+          </p>
+          <p>
+            <strong>Board ID:</strong> <code id="boardId">{{BOARD_ID}}</code>
+          </p>
+          <p>
+            <strong>mDNS:</strong>
+            <a href="http://openbarista.local"
+              ><code>openbarista.local</code></a
+            >
+          </p>
+          <p>
+            <strong>Direct IP:</strong>
+            <a href="http://{{IP_ADDR}}"
+              ><code id="directIp">{{IP_ADDR}}</code></a
+            >
+          </p>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

@@ -18,7 +18,7 @@ use esp_idf_svc::{
         Method,
     },
     io::Write,
-    netif::{EspNetif, NetifConfiguration, NetifStack},
+    netif::{EspNetif, NetifConfiguration},
     nvs::{EspDefaultNvsPartition, EspNvs},
     wifi::{
         AccessPointConfiguration, AuthMethod, BlockingWifi, ClientConfiguration,
@@ -32,10 +32,13 @@ use openbarista::telemetry_feed::SharedTelemetry;
 const NVS_NAMESPACE: &str = "wifi";
 const NVS_SSID_KEY: &str = "ssid";
 const NVS_PASS_KEY: &str = "pass";
+const SETTINGS_NAMESPACE: &str = "settings";
+const SETTINGS_LABEL_KEY: &str = "label";
 
 const AP_SSID: &str = "OpenBarista";
 const MAX_SSID_LEN: usize = 32;
 const MAX_PASS_LEN: usize = 64;
+const MAX_LABEL_LEN: usize = 32;
 const AP_GATEWAY: Ipv4Addr = Ipv4Addr::new(192, 168, 4, 1);
 #[cfg(any(esp_idf_comp_mdns_enabled, esp_idf_comp_espressif__mdns_enabled))]
 const MDNS_HOSTNAME: &str = "openbarista";
@@ -99,6 +102,52 @@ enum ProvisionStatus {
     Rebooting,
 }
 
+#[derive(Clone)]
+struct DeviceSettings {
+    ssid: String,
+    device_label: String,
+}
+
+fn build_id() -> &'static str {
+    option_env!("OPENBARISTA_BUILD_ID").unwrap_or("dev")
+}
+
+fn board_id() -> String {
+    let mut mac = [0u8; 6];
+    let err = unsafe { esp_idf_svc::sys::esp_efuse_mac_get_default(mac.as_mut_ptr()) };
+    if err != 0 {
+        return "unknown".to_owned();
+    }
+    format!(
+        "{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}",
+        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+    )
+}
+
+fn read_device_settings(nvs_partition: &EspDefaultNvsPartition) -> Result<DeviceSettings> {
+    let nvs_wifi = EspNvs::new(nvs_partition.clone(), NVS_NAMESPACE, true)?;
+    let mut ssid_buf = [0u8; 33];
+    let ssid = nvs_wifi
+        .get_str(NVS_SSID_KEY, &mut ssid_buf)?
+        .unwrap_or("")
+        .to_owned();
+
+    let nvs_settings = EspNvs::new(nvs_partition.clone(), SETTINGS_NAMESPACE, true)?;
+    let mut label_buf = [0u8; MAX_LABEL_LEN + 1];
+    let device_label = nvs_settings
+        .get_str(SETTINGS_LABEL_KEY, &mut label_buf)?
+        .unwrap_or("OpenBarista")
+        .to_owned();
+
+    Ok(DeviceSettings { ssid, device_label })
+}
+
+fn save_device_label(nvs_partition: &EspDefaultNvsPartition, device_label: &str) -> Result<()> {
+    let nvs_settings = EspNvs::new(nvs_partition.clone(), SETTINGS_NAMESPACE, true)?;
+    nvs_settings.set_str(SETTINGS_LABEL_KEY, device_label)?;
+    Ok(())
+}
+
 /// Holds the active WiFi driver and optional mDNS handle.
 /// Both must remain alive for the duration of the program.
 pub struct WifiStack {
@@ -129,7 +178,7 @@ pub fn setup_wifi(
     let (saved_ssid, saved_pass) = read_saved_credentials(&nvs_partition)?;
 
     let driver = WifiDriver::new(modem, sysloop.clone(), Some(nvs_partition.clone()))?;
-    let sta_netif = EspNetif::new(NetifStack::Sta)?;
+    let sta_netif = create_station_netif()?;
     let ap_netif = create_softap_netif(AP_GATEWAY)?;
     let esp_wifi = EspWifi::wrap_all(driver, sta_netif, ap_netif)?;
     let mut wifi = BlockingWifi::wrap(esp_wifi, sysloop)?;
@@ -171,6 +220,12 @@ pub fn setup_wifi(
 
         if try_connect(&mut wifi, &ssid) {
             wifi.wait_netif_up()?;
+            let ps_err = unsafe {
+                esp_idf_svc::sys::esp_wifi_set_ps(esp_idf_svc::sys::wifi_ps_type_t_WIFI_PS_NONE)
+            };
+            if ps_err != 0 {
+                println!("[wifi] Warning: could not disable WiFi power save (err={ps_err}).");
+            }
             let ip = wifi.wifi().sta_netif().get_ip_info()?.ip;
             println!(
                 "[wifi] Connected to '{}'. IP: {} | http://openbarista.local | http://{}",
@@ -270,6 +325,9 @@ fn run_captive_portal(
         AP_SSID, ap_ip
     );
 
+    let build_id_value = build_id().to_owned();
+    let board_id_value = board_id();
+
     // Credentials shared between the POST handler task and our polling loop.
     // Nearby SSIDs cache for the setup page.
     let networks_cache: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
@@ -281,6 +339,8 @@ fn run_captive_portal(
     let status_for_handler = status.clone();
     // Move NVS partition into the POST handler so it can save directly.
     let nvs_for_handler = nvs_partition;
+    let build_id_for_handler = build_id_value.clone();
+    let board_id_for_handler = board_id_value.clone();
 
     let server_config = HttpConfig {
         stack_size: 10240,
@@ -291,32 +351,27 @@ fn run_captive_portal(
     // Register the setup page on all common captive-portal detection paths so
     // that phones show the "Sign in to network" prompt automatically.
     for path in CAPTIVE_PATHS {
-        server.fn_handler(path, Method::Get, |req| {
-            let asset = web_assets::captive_index();
+        let build_id_for_page = build_id_value.clone();
+        let board_id_for_page = board_id_value.clone();
+        server.fn_handler(path, Method::Get, move |req| {
+            let html = web_assets::captive_index_html(&build_id_for_page, &board_id_for_page);
+            let headers = response_headers("text/html; charset=utf-8", "no-store");
+            req.into_response(200, Some("OK"), &headers)?
+                .write_all(html.as_bytes())?;
+            Ok::<_, anyhow::Error>(())
+        })?;
+    }
+
+    for path in ["/portal.css", "/portal.js"] {
+        server.fn_handler(path, Method::Get, move |req| {
+            let asset =
+                web_assets::captive_static(path).ok_or_else(|| anyhow!("missing {path} asset"))?;
             let headers = response_headers(asset.content_type, asset.cache_control);
             req.into_response(200, Some("OK"), &headers)?
                 .write_all(asset.body)?;
             Ok::<_, anyhow::Error>(())
         })?;
     }
-
-    server.fn_handler("/portal.css", Method::Get, |req| {
-        let asset = web_assets::captive_static("/portal.css")
-            .ok_or_else(|| anyhow!("missing /portal.css asset"))?;
-        let headers = response_headers(asset.content_type, asset.cache_control);
-        req.into_response(200, Some("OK"), &headers)?
-            .write_all(asset.body)?;
-        Ok::<_, anyhow::Error>(())
-    })?;
-
-    server.fn_handler("/portal.js", Method::Get, |req| {
-        let asset = web_assets::captive_static("/portal.js")
-            .ok_or_else(|| anyhow!("missing /portal.js asset"))?;
-        let headers = response_headers(asset.content_type, asset.cache_control);
-        req.into_response(200, Some("OK"), &headers)?
-            .write_all(asset.body)?;
-        Ok::<_, anyhow::Error>(())
-    })?;
 
     server.fn_handler("/networks", Method::Get, move |req| {
         *lock_or_recover(&scan_requested_for_handler) = true;
@@ -368,10 +423,11 @@ fn run_captive_portal(
             nvs.set_str(NVS_SSID_KEY, &ssid)?;
             nvs.set_str(NVS_PASS_KEY, &pass)?;
             println!("[wifi] Credentials for '{}' saved. Rebooting...", ssid);
-            let success_page = web_assets::captive_success();
-            let headers = response_headers(success_page.content_type, success_page.cache_control);
+            let success_html =
+                web_assets::captive_success_html(&build_id_for_handler, &board_id_for_handler);
+            let headers = response_headers("text/html; charset=utf-8", "no-store");
             req.into_response(200, Some("OK"), &headers)?
-                .write_all(success_page.body)?;
+                .write_all(success_html.as_bytes())?;
             *lock_or_recover(&status_for_handler) = ProvisionStatus::Rebooting;
         }
 
@@ -430,8 +486,12 @@ fn run_captive_portal_on_dedicated_task(
 pub fn start_station_http_server(
     ip_addr: &str,
     telemetry: SharedTelemetry,
+    nvs_partition: EspDefaultNvsPartition,
 ) -> Result<EspHttpServer<'static>> {
-    let html = web_assets::station_index_html(ip_addr);
+    let build_id_value = build_id().to_owned();
+    let board_id_value = board_id();
+    let html = web_assets::station_index_html(ip_addr, &build_id_value, &board_id_value);
+    let settings_html = web_assets::settings_index_html(ip_addr, &build_id_value, &board_id_value);
     let mut server = EspHttpServer::new(&HttpConfig::default())?;
 
     server.fn_handler("/", Method::Get, move |req| {
@@ -441,37 +501,31 @@ pub fn start_station_http_server(
         Ok::<_, anyhow::Error>(())
     })?;
 
-    server.fn_handler("/station.css", Method::Get, |req| {
-        let asset = web_assets::station_css();
-        let headers = station_response_headers(asset.content_type, asset.cache_control);
+    server.fn_handler("/settings", Method::Get, move |req| {
+        let headers = station_response_headers("text/html; charset=utf-8", "no-store");
         req.into_response(200, Some("OK"), &headers)?
-            .write_all(asset.body)?;
+            .write_all(settings_html.as_bytes())?;
         Ok::<_, anyhow::Error>(())
     })?;
 
-    server.fn_handler("/station.js", Method::Get, |req| {
-        let asset = web_assets::station_js();
-        let headers = station_response_headers(asset.content_type, asset.cache_control);
-        req.into_response(200, Some("OK"), &headers)?
-            .write_all(asset.body)?;
-        Ok::<_, anyhow::Error>(())
-    })?;
+    let static_routes: [(&str, fn() -> web_assets::StaticAsset); 6] = [
+        ("/station.css", web_assets::station_css),
+        ("/station.js", web_assets::station_js),
+        ("/settings.css", web_assets::settings_css),
+        ("/settings.js", web_assets::settings_js),
+        ("/uplot.min.js", web_assets::uplot_js),
+        ("/uplot.min.css", web_assets::uplot_css),
+    ];
 
-    server.fn_handler("/uplot.min.js", Method::Get, |req| {
-        let asset = web_assets::uplot_js();
-        let headers = station_response_headers(asset.content_type, asset.cache_control);
-        req.into_response(200, Some("OK"), &headers)?
-            .write_all(asset.body)?;
-        Ok::<_, anyhow::Error>(())
-    })?;
-
-    server.fn_handler("/uplot.min.css", Method::Get, |req| {
-        let asset = web_assets::uplot_css();
-        let headers = station_response_headers(asset.content_type, asset.cache_control);
-        req.into_response(200, Some("OK"), &headers)?
-            .write_all(asset.body)?;
-        Ok::<_, anyhow::Error>(())
-    })?;
+    for (path, asset_fn) in static_routes {
+        server.fn_handler(path, Method::Get, move |req| {
+            let asset = asset_fn();
+            let headers = station_response_headers(asset.content_type, asset.cache_control);
+            req.into_response(200, Some("OK"), &headers)?
+                .write_all(asset.body)?;
+            Ok::<_, anyhow::Error>(())
+        })?;
+    }
 
     let telemetry_for_handler = telemetry.clone();
     server.fn_handler("/api/telemetry", Method::Get, move |req| {
@@ -492,6 +546,120 @@ pub fn start_station_http_server(
         let headers = response_headers("text/plain; charset=utf-8", "no-store");
         req.into_response(200, Some("OK"), &headers)?
             .write_all(b"ok")?;
+        Ok::<_, anyhow::Error>(())
+    })?;
+
+    let nvs_for_get = nvs_partition.clone();
+    let ip_for_get = ip_addr.to_owned();
+    let build_for_get = build_id_value.clone();
+    let board_for_get = board_id_value.clone();
+    server.fn_handler("/api/settings", Method::Get, move |req| {
+        let settings = read_device_settings(&nvs_for_get)?;
+        let payload = settings_json(
+            &settings,
+            &ip_for_get,
+            &build_for_get,
+            &board_for_get,
+            true,
+            "ok",
+            false,
+        );
+        let headers = response_headers("application/json; charset=utf-8", "no-store");
+        req.into_response(200, Some("OK"), &headers)?
+            .write_all(payload.as_bytes())?;
+        Ok::<_, anyhow::Error>(())
+    })?;
+
+    let nvs_for_post = nvs_partition.clone();
+    let ip_for_post = ip_addr.to_owned();
+    let build_for_post = build_id_value.clone();
+    let board_for_post = board_id_value.clone();
+    server.fn_handler("/api/settings", Method::Post, move |mut req| {
+        let max_body_len = 512usize;
+        let mut body = Vec::new();
+        body.reserve(max_body_len);
+
+        loop {
+            if body.len() >= max_body_len {
+                break;
+            }
+            let mut buf = [0u8; 128];
+            let n = req.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            let remaining = max_body_len - body.len();
+            let to_copy = n.min(remaining);
+            body.extend_from_slice(&buf[..to_copy]);
+        }
+
+        let body_str = std::str::from_utf8(&body).unwrap_or("");
+        let ssid = parse_form_field(body_str, "ssid").unwrap_or_default();
+        let pass = parse_form_field(body_str, "password").unwrap_or_default();
+        let device_label = parse_form_field(body_str, "device_label")
+            .unwrap_or_else(|| "OpenBarista".to_owned())
+            .trim()
+            .to_owned();
+        let device_label = if device_label.is_empty() {
+            "OpenBarista".to_owned()
+        } else {
+            device_label
+        };
+
+        if ssid.len() > MAX_SSID_LEN
+            || pass.len() > MAX_PASS_LEN
+            || device_label.len() > MAX_LABEL_LEN
+        {
+            let payload = settings_json(
+                &read_device_settings(&nvs_for_post)?,
+                &ip_for_post,
+                &build_for_post,
+                &board_for_post,
+                false,
+                "One or more fields exceeded maximum length.",
+                false,
+            );
+            let headers = response_headers("application/json; charset=utf-8", "no-store");
+            req.into_response(400, Some("Bad Request"), &headers)?
+                .write_all(payload.as_bytes())?;
+            return Ok::<_, anyhow::Error>(());
+        }
+
+        let mut rebooting = false;
+        save_device_label(&nvs_for_post, &device_label)?;
+
+        if !ssid.is_empty() {
+            let nvs_wifi = EspNvs::new(nvs_for_post.clone(), NVS_NAMESPACE, true)?;
+            nvs_wifi.set_str(NVS_SSID_KEY, &ssid)?;
+            nvs_wifi.set_str(NVS_PASS_KEY, &pass)?;
+            rebooting = true;
+        }
+
+        let updated = read_device_settings(&nvs_for_post)?;
+        let payload = settings_json(
+            &updated,
+            &ip_for_post,
+            &build_for_post,
+            &board_for_post,
+            true,
+            if rebooting {
+                "Settings saved. Rebooting to apply network changes."
+            } else {
+                "Settings saved."
+            },
+            rebooting,
+        );
+        let headers = response_headers("application/json; charset=utf-8", "no-store");
+        req.into_response(200, Some("OK"), &headers)?
+            .write_all(payload.as_bytes())?;
+
+        if rebooting {
+            thread::spawn(|| {
+                thread::sleep(Duration::from_millis(1200));
+                unsafe { esp_idf_svc::sys::esp_restart() };
+            });
+        }
+
         Ok::<_, anyhow::Error>(())
     })?;
 
@@ -555,6 +723,28 @@ fn networks_json(items: &[String]) -> String {
     out
 }
 
+fn settings_json(
+    settings: &DeviceSettings,
+    ip_addr: &str,
+    build_id: &str,
+    board_id: &str,
+    ok: bool,
+    message: &str,
+    rebooting: bool,
+) -> String {
+    format!(
+        "{{\"ok\":{},\"message\":\"{}\",\"rebooting\":{},\"ssid\":\"{}\",\"device_label\":\"{}\",\"ip_addr\":\"{}\",\"build_id\":\"{}\",\"board_id\":\"{}\"}}",
+        if ok { "true" } else { "false" },
+        json_escape(message),
+        if rebooting { "true" } else { "false" },
+        json_escape(&settings.ssid),
+        json_escape(&settings.device_label),
+        json_escape(ip_addr),
+        json_escape(build_id),
+        json_escape(board_id),
+    )
+}
+
 fn telemetry_json(seq: u64, temperature_c: f32, pressure_bar: f32, pressure_psi: f32) -> String {
     let temperature_c = sanitize_telemetry_value(temperature_c);
     let pressure_bar = sanitize_telemetry_value(pressure_bar);
@@ -604,6 +794,21 @@ fn create_softap_netif(ap_gateway: Ipv4Addr) -> Result<EspNetif> {
     }));
 
     Ok(EspNetif::new_with_conf(&ap_netif_conf)?)
+}
+
+fn create_station_netif() -> Result<EspNetif> {
+    let mut sta_netif_conf = NetifConfiguration::wifi_default_client();
+    sta_netif_conf.ip_configuration = Some(ipv4::Configuration::Client(
+        ipv4::ClientConfiguration::DHCP(ipv4::DHCPClientSettings {
+            hostname: Some(
+                "openbarista"
+                    .try_into()
+                    .map_err(|_| anyhow!("Invalid hostname"))?,
+            ),
+        }),
+    ));
+
+    Ok(EspNetif::new_with_conf(&sta_netif_conf)?)
 }
 
 fn start_captive_dns(ap_gateway: Ipv4Addr) -> Result<thread::JoinHandle<()>> {

@@ -1,0 +1,156 @@
+:root {
+  --bg: #f3ede4;
+  --card: #fffaf2;
+  --line: #dfd1bf;
+  --ink: #241911;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Gill Sans", "Segoe UI", sans-serif;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at 8% 12%, #ffffff9e, transparent 32%),
+    radial-gradient(circle at 90% 85%, #f5b66540, transparent 36%),
+    linear-gradient(140deg, #efe7db 0%, var(--bg) 55%, #e8ded0 100%);
+  padding: 1rem;
+}
+
+.stage {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(transparent 96%, rgba(36, 25, 17, 0.04) 96%),
+    linear-gradient(90deg, transparent 96%, rgba(36, 25, 17, 0.04) 96%);
+  background-size: 22px 22px;
+}
+
+.layout {
+  width: min(760px, 100%);
+  margin: 0 auto;
+  position: relative;
+  z-index: 1;
+}
+
+.panel {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--card);
+  box-shadow: 0 16px 28px rgba(68, 45, 22, 0.12);
+  padding: 1rem;
+}
+
+.head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.eyebrow {
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 0.72rem;
+  color: #875d35;
+  font-weight: 700;
+}
+
+h1 {
+  margin: 0.24rem 0 0;
+  font-family: "Avenir Next Condensed", "Trebuchet MS", sans-serif;
+  font-size: clamp(1.35rem, 3vw, 1.75rem);
+}
+
+.back-link {
+  border: 1px solid #d8c6b3;
+  color: #543626;
+  background: #fff;
+  border-radius: 999px;
+  text-decoration: none;
+  font-size: 0.8rem;
+  font-weight: 700;
+  padding: 0.28rem 0.7rem;
+}
+
+.hint {
+  margin: 0.7rem 0 0.9rem;
+  color: #5d4938;
+  font-size: 0.9rem;
+}
+
+.settings-form label {
+  display: block;
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #73533a;
+  margin: 0 0 0.22rem;
+  font-weight: 700;
+}
+
+.settings-form input {
+  width: 100%;
+  border: 1px solid #cfbea8;
+  border-radius: 8px;
+  padding: 0.58rem 0.63rem;
+  margin: 0 0 0.74rem;
+  font-size: 0.95rem;
+}
+
+.settings-form input:focus {
+  border-color: #de8a3c;
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(222, 138, 60, 0.16);
+}
+
+#saveSettingsBtn {
+  width: 100%;
+  border: 0;
+  border-radius: 8px;
+  padding: 0.72rem;
+  background: linear-gradient(135deg, #d66928, #f0a349);
+  color: #2e1f14;
+  font-size: 0.94rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+#saveSettingsBtn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.status {
+  font-size: 0.84rem;
+  color: #5e4a3b;
+  margin: 0.62rem 0 0;
+  min-height: 1.15rem;
+}
+
+.identity {
+  margin-top: 0.95rem;
+  border-top: 1px solid #e5d5c2;
+  padding-top: 0.7rem;
+}
+
+.identity p {
+  margin: 0.34rem 0;
+  color: #5a4738;
+  font-size: 0.84rem;
+}
+
+code {
+  background: #f4ece2;
+  border: 1px solid #ebddcc;
+  border-radius: 4px;
+  padding: 0.08rem 0.32rem;
+  font-family: "Courier New", monospace;
+  color: #563824;
+}

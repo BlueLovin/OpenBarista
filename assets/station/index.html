@@ -3,82 +3,134 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>OpenBarista</title>
-    <link rel="stylesheet" href="/uplot.min.css" />
+    <title>OpenBarista Brew Dashboard</title>
     <link rel="stylesheet" href="/station.css" />
-    <script src="/uplot.min.js" defer></script>
     <script src="/station.js" defer></script>
   </head>
   <body>
-    <main class="card">
-      <header class="device-header">
-        <h1>&#9749; OpenBarista</h1>
-        <span id="telemetryStatus" class="badge">Connecting&hellip;</span>
+    <div class="bg-orb bg-orb-a" aria-hidden="true"></div>
+    <div class="bg-orb bg-orb-b" aria-hidden="true"></div>
+
+    <main class="dashboard-shell">
+      <header class="topbar">
+        <div class="brand-wrap">
+          <span class="brand-icon" aria-hidden="true">&#126;</span>
+          <h1>OPENBARISTA</h1>
+        </div>
+        <div class="topbar-right">
+          <a class="settings-link" href="/settings">Settings</a>
+          <span id="telemetryStatus" class="badge">Connecting...</span>
+        </div>
       </header>
 
-      <div class="shot-controls">
-        <button id="startShotBtn" class="btn-shot">Start Shot</button>
-        <div id="shotTimer" class="shot-timer" aria-live="polite">--</div>
-        <div class="control-row">
-          <label>
-            Target profile
-            <select id="profileSelect"></select>
-          </label>
-          <label>
-            Window
-            <select id="windowSelect">
-              <option value="20">20 s</option>
-              <option value="40">40 s</option>
-              <option value="60" selected>60 s</option>
-              <option value="120">120 s</option>
-            </select>
-          </label>
-        </div>
-      </div>
+      <section
+        class="metric-grid metric-grid-main"
+        aria-label="Live key metrics"
+      >
+        <article class="metric-card">
+          <p class="metric-label">Pressure</p>
+          <p class="metric-value-wrap">
+            <strong id="metricBar" class="metric-value">--</strong>
+            <span class="metric-unit">bar</span>
+          </p>
+        </article>
 
-      <div class="metrics">
-        <div class="metric">
-          <label>Temperature</label>
-          <strong id="metricTemp">--</strong>
+        <article class="metric-card metric-card-cool">
+          <p class="metric-label">Boiler Temp</p>
+          <p class="metric-value-wrap">
+            <strong id="metricTemp" class="metric-value">--</strong>
+            <span class="metric-unit">C</span>
+          </p>
+        </article>
+      </section>
+
+      <section class="profile-card" aria-label="Live profile chart">
+        <div class="profile-head">
+          <h2>Live Profile</h2>
+          <p class="chart-legend">
+            <span class="swatch swatch-pressure"></span>Pressure
+            <span class="swatch swatch-flow"></span>Flow
+            <span class="swatch swatch-target"></span>Target
+          </p>
         </div>
-        <div class="metric metric-primary">
-          <label>Pressure</label>
-          <strong id="metricBar">--</strong>
+
+        <div id="uplotChart" role="img" aria-label="Live telemetry chart"></div>
+
+        <div class="profile-foot">
+          <div id="shotTimer" class="shot-timer" aria-live="polite">
+            00:00<span>s</span>
+          </div>
+          <div class="profile-config">
+            <label>
+              Profile
+              <select id="profileSelect"></select>
+            </label>
+            <label>
+              Window
+              <select id="windowSelect">
+                <option value="20">20 s</option>
+                <option value="40">40 s</option>
+                <option value="60" selected>60 s</option>
+                <option value="120">120 s</option>
+              </select>
+            </label>
+          </div>
         </div>
-        <div class="metric">
-          <label>PSI</label>
+      </section>
+
+      <section
+        class="metric-grid metric-grid-secondary"
+        aria-label="Supporting stats"
+      >
+        <article class="mini-card">
+          <p>PSI</p>
           <strong id="metricPsi">--</strong>
-        </div>
-        <div class="metric">
-          <label>Peak bar</label>
+        </article>
+        <article class="mini-card">
+          <p>Peak Bar</p>
           <strong id="metricPeakBar">--</strong>
-        </div>
-        <div class="metric">
-          <label>Avg bar</label>
+        </article>
+        <article class="mini-card">
+          <p>Avg Bar</p>
           <strong id="metricAvgBar">--</strong>
-        </div>
-      </div>
+        </article>
+      </section>
 
-      <div id="uplotChart" role="img" aria-label="Live telemetry chart"></div>
+      <section class="status-grid" aria-label="Machine status indicators">
+        <article class="status-card">
+          <span class="dot dot-cyan" aria-hidden="true"></span>
+          <div>
+            <p>Filter Quality</p>
+            <strong>98%</strong>
+          </div>
+        </article>
+        <article class="status-card">
+          <span class="dot dot-blue" aria-hidden="true"></span>
+          <div>
+            <p>Scale Sync</p>
+            <strong>Connected</strong>
+          </div>
+        </article>
+      </section>
 
-      <p class="chart-legend">
-        <span class="dot dot-blue"></span>Pressure&nbsp;(bar) &ensp;<span
-          class="dot dot-orange"
-        ></span
-        >Temperature&nbsp;(&deg;C) &ensp;<span class="dot dot-olive"></span
-        >Target profile
-      </p>
+      <section class="cta-wrap">
+        <button id="startShotBtn" class="btn-shot">START EXTRACTION</button>
+      </section>
 
-      <details class="device-info">
-        <summary>Device info</summary>
-        <p>
-          mDNS:
-          <a href="http://openbarista.local"><code>openbarista.local</code></a>
-        </p>
-        <p>
-          Direct IP: <a href="http://{{IP_ADDR}}"><code>{{IP_ADDR}}</code></a>
-        </p>
-      </details>
+      <nav class="bottom-nav" aria-label="Primary navigation">
+        <a class="nav-item nav-item-active" href="#" aria-current="page">
+          <span class="nav-icon" aria-hidden="true">&#9789;</span>
+          <span>Brew</span>
+        </a>
+        <a class="nav-item" href="#">
+          <span class="nav-icon" aria-hidden="true">&#9716;</span>
+          <span>History</span>
+        </a>
+        <a class="nav-item" href="/settings">
+          <span class="nav-icon" aria-hidden="true">&#9881;</span>
+          <span>Settings</span>
+        </a>
+      </nav>
     </main>
   </body>
 </html>

@@ -51,13 +51,17 @@ fn main() -> Result<()> {
     // network and advertises itself as http://openbarista.local via mDNS.
     let sysloop = EspSystemEventLoop::take()?;
     let nvs_partition = EspDefaultNvsPartition::take()?;
+    let nvs_for_station_server = nvs_partition.clone();
     // Keep _wifi_stack alive for the lifetime of the program; dropping it would
     // disconnect WiFi and stop mDNS.
     let _wifi_stack = wifi_provision::setup_wifi(peripherals.modem, sysloop, nvs_partition)?;
     let telemetry = SharedTelemetry::new();
     // Keep station-mode HTTP server alive so openbarista.local serves a page.
-    let _http_server =
-        wifi_provision::start_station_http_server(&_wifi_stack.ip_addr, telemetry.clone())?;
+    let _http_server = wifi_provision::start_station_http_server(
+        &_wifi_stack.ip_addr,
+        telemetry.clone(),
+        nvs_for_station_server,
+    )?;
     // -------------------------------------------------------------------------
 
     let spi_driver = SpiDriver::new::<spi::SPI2>(
