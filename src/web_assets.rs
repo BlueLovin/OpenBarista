@@ -24,6 +24,10 @@ const STATION_HTML_TEMPLATE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/assets/station/index.html"
 ));
+const BASE_CSS: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/assets/station/base.css"
+));
 const SETTINGS_HTML_TEMPLATE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/assets/station/settings.html"
@@ -86,6 +90,14 @@ pub fn station_css() -> StaticAsset {
         content_type: "text/css; charset=utf-8",
         cache_control: "public, max-age=86400",
         body: STATION_CSS,
+    }
+}
+
+pub fn base_css() -> StaticAsset {
+    StaticAsset {
+        content_type: "text/css; charset=utf-8",
+        cache_control: "public, max-age=86400",
+        body: BASE_CSS,
     }
 }
 

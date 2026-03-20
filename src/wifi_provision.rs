@@ -508,7 +508,8 @@ pub fn start_station_http_server(
         Ok::<_, anyhow::Error>(())
     })?;
 
-    let static_routes: [(&str, fn() -> web_assets::StaticAsset); 6] = [
+    let static_routes: [(&str, fn() -> web_assets::StaticAsset); 7] = [
+        ("/base.css", web_assets::base_css),
         ("/station.css", web_assets::station_css),
         ("/station.js", web_assets::station_js),
         ("/settings.css", web_assets::settings_css),

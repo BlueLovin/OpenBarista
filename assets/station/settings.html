@@ -4,23 +4,32 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>OpenBarista Settings</title>
+    <link rel="stylesheet" href="/base.css" />
     <link rel="stylesheet" href="/settings.css" />
     <script src="/settings.js" defer></script>
   </head>
   <body>
-    <div class="stage"></div>
-    <main class="layout">
-      <section class="panel">
-        <header class="head">
-          <div>
-            <p class="eyebrow">OpenBarista</p>
-            <h1>Device Settings</h1>
-          </div>
-          <a class="back-link" href="/">Back to Telemetry</a>
-        </header>
+    <div class="bg-orb bg-orb-a" aria-hidden="true"></div>
+    <div class="bg-orb bg-orb-b" aria-hidden="true"></div>
 
-        <p class="hint">Update local configuration and Wi-Fi credentials.</p>
+    <main class="settings-shell">
+      <header class="topbar">
+        <div class="brand-wrap">
+          <span class="brand-icon" aria-hidden="true">&#126;</span>
+          <h1>OPENBARISTA</h1>
+        </div>
+        <a class="back-link" href="/">Back</a>
+      </header>
 
+      <section class="panel intro-panel">
+        <p class="eyebrow">Device Control</p>
+        <h2>Machine Settings</h2>
+        <p class="hint">
+          Change your device label and Wi-Fi network from one place.
+        </p>
+      </section>
+
+      <section class="panel form-panel">
         <form id="deviceSettingsForm" class="settings-form">
           <label for="deviceLabelInput">Device label</label>
           <input
@@ -31,8 +40,18 @@
             placeholder="Kitchen machine"
           />
 
-          <label for="ssidInput">Wi-Fi SSID</label>
-          <input id="ssidInput" name="ssid" type="text" maxlength="32" />
+          <div class="ssid-row">
+            <label for="ssidSelect">Wi-Fi network</label>
+            <button id="refreshNetworksBtn" type="button" class="btn-secondary">
+              Refresh
+            </button>
+          </div>
+          <select id="ssidSelect" name="ssid" aria-label="Wi-Fi network">
+            <option value="">Keep current network</option>
+          </select>
+          <p id="networkStatus" class="micro-status">
+            Loading available networks...
+          </p>
 
           <label for="passwordInput">Wi-Fi password</label>
           <input
@@ -45,27 +64,21 @@
           <button id="saveSettingsBtn" type="submit">Save Settings</button>
           <p id="settingsStatus" class="status">Loading settings...</p>
         </form>
+      </section>
 
-        <div class="identity">
-          <p>
-            <strong>Build ID:</strong> <code id="buildId">{{BUILD_ID}}</code>
-          </p>
-          <p>
-            <strong>Board ID:</strong> <code id="boardId">{{BOARD_ID}}</code>
-          </p>
-          <p>
-            <strong>mDNS:</strong>
-            <a href="http://openbarista.local"
-              ><code>openbarista.local</code></a
-            >
-          </p>
-          <p>
-            <strong>Direct IP:</strong>
-            <a href="http://{{IP_ADDR}}"
-              ><code id="directIp">{{IP_ADDR}}</code></a
-            >
-          </p>
-        </div>
+      <section class="panel identity">
+        <p><strong>Build ID:</strong> <code id="buildId">{{BUILD_ID}}</code></p>
+        <p><strong>Board ID:</strong> <code id="boardId">{{BOARD_ID}}</code></p>
+        <p>
+          <strong>mDNS:</strong>
+          <a href="http://openbarista.local"><code>openbarista.local</code></a>
+        </p>
+        <p>
+          <strong>Direct IP:</strong>
+          <a href="http://{{IP_ADDR}}"
+            ><code id="directIp">{{IP_ADDR}}</code></a
+          >
+        </p>
       </section>
     </main>
   </body>
