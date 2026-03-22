@@ -573,7 +573,7 @@ pub fn start_station_http_server(
     ip_addr: &str,
     telemetry: SharedTelemetry,
     nvs_partition: EspDefaultNvsPartition,
-    wifi: Arc<Mutex<BlockingWifi<EspWifi<'static>>>>,
+    _wifi: Arc<Mutex<BlockingWifi<EspWifi<'static>>>>,
     temperature_offset_c: Arc<Mutex<f32>>,
 ) -> Result<EspHttpServer<'static>> {
     let build_id_value = build_id().to_owned();
@@ -596,25 +596,15 @@ pub fn start_station_http_server(
         Ok::<_, anyhow::Error>(())
     })?;
 
+    let nvs_for_networks = nvs_partition.clone();
     server.fn_handler("/networks", Method::Get, move |req| {
-        let networks = {
-            let mut w = lock_or_recover(&wifi);
-            match w.scan_n::<16>() {
-                Ok((found, _)) => {
-                    let mut names: Vec<String> = found
-                        .into_iter()
-                        .map(|ap| ap.ssid.to_string())
-                        .filter(|name| !name.is_empty())
-                        .collect();
-                    names.sort();
-                    names.dedup();
-                    names
-                }
-                Err(err) => {
-                    println!("[wifi] Station scan failed: {err:?}");
-                    Vec::new()
-                }
-            }
+        // Active scans while connected can destabilize some AP/security combinations
+        // (for example MMIE errors). In station mode we serve the saved SSID only.
+        let settings = read_device_settings(&nvs_for_networks)?;
+        let networks = if settings.ssid.is_empty() {
+            Vec::new()
+        } else {
+            vec![settings.ssid]
         };
         let payload = networks_json(&networks);
         let headers = response_headers("application/json; charset=utf-8", "no-store");
