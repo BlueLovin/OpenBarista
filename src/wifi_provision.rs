@@ -42,7 +42,6 @@ const MAX_LABEL_LEN: usize = 32;
 const AP_GATEWAY: Ipv4Addr = Ipv4Addr::new(192, 168, 4, 1);
 #[cfg(any(esp_idf_comp_mdns_enabled, esp_idf_comp_espressif__mdns_enabled))]
 const MDNS_HOSTNAME: &str = "openbarista";
-const PROVISION_TASK_STACK_SIZE: usize = 32 * 1024;
 
 // Captive portal detection paths used by Android, iOS, Windows, macOS
 const CAPTIVE_PATHS: &[&str] = &[
@@ -151,13 +150,39 @@ fn save_device_label(nvs_partition: &EspDefaultNvsPartition, device_label: &str)
 /// Holds the active WiFi driver and optional mDNS handle.
 /// Both must remain alive for the duration of the program.
 pub struct WifiStack {
-    #[allow(dead_code)]
-    pub wifi: BlockingWifi<EspWifi<'static>>,
+    /// Shared reference kept alive so WiFi stays connected; also used for
+    /// on-demand network scans from the station HTTP server.
+    pub wifi: Arc<Mutex<BlockingWifi<EspWifi<'static>>>>,
     /// Station-mode IP address as a string (e.g. "192.168.1.42").
     pub ip_addr: String,
     #[cfg(any(esp_idf_comp_mdns_enabled, esp_idf_comp_espressif__mdns_enabled))]
-    #[allow(dead_code)]
     pub mdns: EspMdns,
+}
+
+/// Holds all connectivity components that must stay alive for the lifetime
+/// of the firmware.
+pub struct WifiRuntime {
+    pub stack: WifiStack,
+    pub station_http_server: EspHttpServer<'static>,
+}
+
+impl WifiRuntime {
+    pub fn ip_addr(&self) -> &str {
+        &self.stack.ip_addr
+    }
+
+    fn log_keepalive_state(&self) {
+        let wifi_refs = Arc::strong_count(&self.stack.wifi);
+        let http_server_size = core::mem::size_of_val(&self.station_http_server);
+        #[cfg(any(esp_idf_comp_mdns_enabled, esp_idf_comp_espressif__mdns_enabled))]
+        let mdns_size = core::mem::size_of_val(&self.stack.mdns);
+        println!(
+            "[wifi] Station services online at http://{} (wifi refs: {}, http server bytes: {}).",
+            self.stack.ip_addr, wifi_refs, http_server_size
+        );
+        #[cfg(any(esp_idf_comp_mdns_enabled, esp_idf_comp_espressif__mdns_enabled))]
+        println!("[wifi] mDNS keepalive handle active ({} bytes).", mdns_size);
+    }
 }
 
 /// Initialises WiFi.
@@ -171,9 +196,16 @@ pub struct WifiStack {
 ///   path.
 pub fn setup_wifi(
     modem: Modem<'static>,
-    sysloop: EspSystemEventLoop,
-    nvs_partition: EspDefaultNvsPartition,
-) -> Result<WifiStack> {
+    telemetry: SharedTelemetry,
+) -> Result<WifiRuntime, anyhow::Error> {
+    // --- WiFi provisioning & mDNS -------------------------------------------
+    // On first boot this will start a SoftAP named "OpenBarista" and serve a
+    // captive portal at 192.168.4.1 so the user can enter their home WiFi
+    // credentials.  On subsequent boots the device connects to the saved
+    // network and advertises itself as http://openbarista.local via mDNS.
+    let sysloop = EspSystemEventLoop::take()?;
+    let nvs_partition = EspDefaultNvsPartition::take()?;
+    let nvs_for_station_server = nvs_partition.clone();
     // Read any previously saved credentials from NVS.
     let (saved_ssid, saved_pass) = read_saved_credentials(&nvs_partition)?;
 
@@ -231,14 +263,23 @@ pub fn setup_wifi(
                 "[wifi] Connected to '{}'. IP: {} | http://openbarista.local | http://{}",
                 ssid, ip, ip
             );
-            #[cfg(any(esp_idf_comp_mdns_enabled, esp_idf_comp_espressif__mdns_enabled))]
-            let mdns = start_mdns()?;
-            return Ok(WifiStack {
-                wifi,
-                ip_addr: ip.to_string(),
+            let ip_addr = ip.to_string();
+            let wifi = Arc::new(Mutex::new(wifi));
+            let stack = WifiStack {
+                wifi: wifi.clone(),
+                ip_addr: ip_addr.clone(),
                 #[cfg(any(esp_idf_comp_mdns_enabled, esp_idf_comp_espressif__mdns_enabled))]
-                mdns,
-            });
+                mdns: start_mdns()?,
+            };
+            let station_http_server =
+                start_station_http_server(&ip_addr, telemetry, nvs_for_station_server, wifi)?;
+
+            let runtime = WifiRuntime {
+                stack,
+                station_http_server,
+            };
+            runtime.log_keepalive_state();
+            return Ok(runtime);
         }
 
         println!("[wifi] Could not connect after retries. Starting provisioning portal...");
@@ -247,7 +288,10 @@ pub fn setup_wifi(
         println!("[wifi] No saved credentials. Starting provisioning portal...");
     }
 
-    run_captive_portal_on_dedicated_task(wifi, nvs_partition)
+    run_captive_portal(wifi, nvs_partition)?;
+    Err(anyhow!(
+        "Provisioning portal returned unexpectedly without reboot"
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -300,7 +344,7 @@ fn start_mdns() -> Result<EspMdns> {
 fn run_captive_portal(
     mut wifi: BlockingWifi<EspWifi<'static>>,
     nvs_partition: EspDefaultNvsPartition,
-) -> Result<WifiStack> {
+) -> Result<()> {
     let ap_config = AccessPointConfiguration {
         ssid: AP_SSID.try_into().map_err(|_| anyhow!("AP SSID error"))?,
         auth_method: AuthMethod::None,
@@ -316,7 +360,7 @@ fn run_captive_portal(
 
     // Route hostname lookups to the AP so Android/iOS captive checks can
     // resolve and hit the portal endpoints.
-    let _dns_thread = start_captive_dns(AP_GATEWAY)?;
+    start_captive_dns(AP_GATEWAY)?;
 
     let ap_ip = wifi.wifi().ap_netif().get_ip_info()?.ip;
 
@@ -458,35 +502,11 @@ fn run_captive_portal(
     }
 }
 
-fn run_captive_portal_on_dedicated_task(
-    wifi: BlockingWifi<EspWifi<'static>>,
-    nvs_partition: EspDefaultNvsPartition,
-) -> Result<WifiStack> {
-    let builder = thread::Builder::new()
-        .name("wifi-provision".to_owned())
-        .stack_size(PROVISION_TASK_STACK_SIZE);
-
-    let handle = builder
-        .spawn(move || {
-            if let Err(err) = run_captive_portal(wifi, nvs_partition) {
-                println!("[wifi] Provisioning task failed: {err:?}");
-            }
-        })
-        .map_err(|err| anyhow!("Failed to spawn provisioning task: {err}"))?;
-
-    println!(
-        "[wifi] Provisioning task started (stack {} bytes).",
-        PROVISION_TASK_STACK_SIZE
-    );
-
-    let _ = handle.join();
-    Err(anyhow!("Provisioning task exited unexpectedly"))
-}
-
 pub fn start_station_http_server(
     ip_addr: &str,
     telemetry: SharedTelemetry,
     nvs_partition: EspDefaultNvsPartition,
+    wifi: Arc<Mutex<BlockingWifi<EspWifi<'static>>>>,
 ) -> Result<EspHttpServer<'static>> {
     let build_id_value = build_id().to_owned();
     let board_id_value = board_id();
@@ -505,6 +525,33 @@ pub fn start_station_http_server(
         let headers = station_response_headers("text/html; charset=utf-8", "no-store");
         req.into_response(200, Some("OK"), &headers)?
             .write_all(settings_html.as_bytes())?;
+        Ok::<_, anyhow::Error>(())
+    })?;
+
+    server.fn_handler("/networks", Method::Get, move |req| {
+        let networks = {
+            let mut w = lock_or_recover(&wifi);
+            match w.scan_n::<16>() {
+                Ok((found, _)) => {
+                    let mut names: Vec<String> = found
+                        .into_iter()
+                        .map(|ap| ap.ssid.to_string())
+                        .filter(|name| !name.is_empty())
+                        .collect();
+                    names.sort();
+                    names.dedup();
+                    names
+                }
+                Err(err) => {
+                    println!("[wifi] Station scan failed: {err:?}");
+                    Vec::new()
+                }
+            }
+        };
+        let payload = networks_json(&networks);
+        let headers = response_headers("application/json; charset=utf-8", "no-store");
+        req.into_response(200, Some("OK"), &headers)?
+            .write_all(payload.as_bytes())?;
         Ok::<_, anyhow::Error>(())
     })?;
 
