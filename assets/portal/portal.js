@@ -2,6 +2,10 @@ const select = document.getElementById("networkSelect");
 const ssidInput = document.getElementById("ssid");
 const status = document.getElementById("netStatus");
 const refreshBtn = document.getElementById("refreshBtn");
+const statusBadge = document.getElementById("connectStageBadge");
+const portalStatusText = document.getElementById("portalStatusText");
+const statusAttempt = document.getElementById("statusAttempt");
+const connectBtn = document.getElementById("connectBtn");
 
 if (select && ssidInput) {
   select.addEventListener("change", () => {
@@ -51,8 +55,53 @@ async function refreshNetworks() {
   }
 }
 
+function renderConnectionStatus(data) {
+  if (statusBadge && typeof data.stage === "string") {
+    statusBadge.textContent = data.stage;
+    statusBadge.classList.remove("badge-live", "badge-warn");
+    if (data.stage === "connected") {
+      statusBadge.classList.add("badge-live");
+    } else if (data.stage === "failed" || data.stage === "rebooting") {
+      statusBadge.classList.add("badge-warn");
+    }
+  }
+
+  const attemptText =
+    typeof data.attempt === "number" && typeof data.total === "number"
+      ? `attempt ${data.attempt}/${data.total}`
+      : "booting";
+
+  if (statusAttempt) {
+    statusAttempt.textContent = attemptText;
+  }
+
+  if (portalStatusText) {
+    const message = typeof data.message === "string" ? data.message : "";
+    portalStatusText.textContent = message || `Wi-Fi ${attemptText}`;
+  }
+
+  if (connectBtn && data.stage === "rebooting") {
+    connectBtn.disabled = true;
+  }
+}
+
+async function pollStatus() {
+  try {
+    const resp = await fetch("/status", { cache: "no-store" });
+    if (!resp.ok) {
+      return;
+    }
+    const payload = await resp.json();
+    renderConnectionStatus(payload);
+  } catch (_err) {
+    // Keep UI usable even if status polling fails temporarily.
+  }
+}
+
 if (refreshBtn) {
   refreshBtn.addEventListener("click", refreshNetworks);
 }
 
 refreshNetworks();
+pollStatus();
+setInterval(pollStatus, 1000);

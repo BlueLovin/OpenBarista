@@ -1,232 +1,28 @@
-:root {
-  --bg-1: #10241f;
-  --bg-2: #20473f;
-  --accent: #ff8f3f;
-  --accent-2: #ffc058;
-  --paper: #fffdf9;
-  --ink: #1f2a25;
-  --muted: #4b5b53;
-  --line: rgba(16, 36, 31, 0.14);
-  --ok: #1f7f51;
+.portal-shell {
+  gap: 12px;
 }
 
-* {
-  box-sizing: border-box;
-}
-
-body {
-  margin: 0;
-  min-height: 100vh;
-  font-family: "Avenir Next", "Trebuchet MS", "Segoe UI", sans-serif;
-  color: var(--ink);
-  background:
-    radial-gradient(circle at 15% 15%, #2d6157 0%, transparent 35%),
-    radial-gradient(circle at 85% 75%, #ffd48f44 0%, transparent 40%),
-    linear-gradient(145deg, var(--bg-1), var(--bg-2));
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 1.1rem;
-}
-
-.mesh {
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  background-image:
-    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
-  background-size: 26px 26px;
-}
-
-.shell {
-  width: min(960px, 100%);
-  display: grid;
-  grid-template-columns: 1.08fr 1fr;
-  gap: 1rem;
-  position: relative;
-}
-
-.hero {
-  border-radius: 18px;
-  background: linear-gradient(150deg, #18342d, #1a4138);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  color: #f2f4ef;
-  padding: 1.5rem;
-  box-shadow: 0 22px 44px rgba(0, 0, 0, 0.28);
-  animation: rise 480ms ease-out;
-}
-
-.eyebrow {
-  margin: 0;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  font-size: 0.74rem;
-  color: #ffd29e;
+.badge {
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 0.7rem;
   font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: #2e3648;
+  color: #cfd6e6;
 }
 
-h1 {
-  margin: 0.45rem 0 0.6rem;
-  font-size: clamp(1.7rem, 3.4vw, 2.35rem);
-  line-height: 1.05;
+.badge-live {
+  background: #0f4534;
+  color: #83f4c8;
 }
 
-.subtitle {
-  margin: 0;
-  max-width: 38ch;
-  font-size: 0.95rem;
-  color: #d8e5df;
-  line-height: 1.45;
+.badge-warn {
+  background: #432115;
+  color: #ffc3a6;
 }
 
-.identity {
-  margin-top: 1rem;
-  display: flex;
-  gap: 0.55rem;
-  flex-wrap: wrap;
-}
-
-.identity span {
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  background: rgba(255, 255, 255, 0.06);
-  padding: 0.34rem 0.52rem;
-  border-radius: 7px;
-  font-size: 0.78rem;
-}
-
-.card {
-  background: var(--paper);
-  border-radius: 18px;
-  border: 1px solid var(--line);
-  padding: 1.35rem;
-  box-shadow: 0 22px 44px rgba(0, 0, 0, 0.22);
-  animation: rise 620ms ease-out;
-}
-
-.card-success {
+.success-panel {
   text-align: center;
-  width: min(560px, 100%);
-}
-
-h2 {
-  margin: 0 0 0.95rem;
-  font-size: 1.05rem;
-  letter-spacing: 0.01em;
-}
-
-label {
-  display: block;
-  font-size: 0.8rem;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--muted);
-  margin-bottom: 0.28rem;
-  font-weight: 700;
-}
-
-.row {
-  display: flex;
-  gap: 0.5rem;
-  margin-bottom: 0.76rem;
-}
-
-input,
-select {
-  width: 100%;
-  border: 1px solid #cfdad5;
-  border-radius: 8px;
-  padding: 0.65rem 0.72rem;
-  font-size: 0.98rem;
-  background: #fff;
-  color: var(--ink);
-  transition:
-    border-color 130ms ease,
-    box-shadow 130ms ease;
-}
-
-input {
-  margin-bottom: 0.88rem;
-}
-
-input:focus,
-select:focus {
-  border-color: var(--accent);
-  outline: none;
-  box-shadow: 0 0 0 3px rgba(255, 143, 63, 0.22);
-}
-
-button {
-  border: 0;
-  cursor: pointer;
-  font-weight: 700;
-  border-radius: 8px;
-}
-
-.btn-primary {
-  width: 100%;
-  padding: 0.78rem;
-  background: linear-gradient(135deg, var(--accent), var(--accent-2));
-  color: #332110;
-  font-size: 0.97rem;
-}
-
-.btn-primary:hover {
-  filter: brightness(0.96);
-}
-
-.btn-secondary {
-  width: auto;
-  white-space: nowrap;
-  background: #edf2f0;
-  border: 1px solid #d6e2dd;
-  color: #34413c;
-  font-size: 0.83rem;
-  padding: 0.54rem 0.75rem;
-}
-
-.btn-secondary:hover {
-  background: #e5ece9;
-}
-
-.status {
-  margin: -0.32rem 0 0.78rem;
-  color: #4f5d57;
-  font-size: 0.84rem;
-}
-
-code {
-  background: #f3f8f6;
-  border: 1px solid #dde9e4;
-  border-radius: 5px;
-  padding: 0.13rem 0.34rem;
-  font-family: "Courier New", monospace;
-  color: #24483b;
-}
-
-.hint {
-  color: #4a5a53;
-  font-size: 0.87rem;
-}
-
-@keyframes rise {
-  from {
-    opacity: 0;
-    transform: translateY(14px) scale(0.985);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-@media (max-width: 760px) {
-  .shell {
-    grid-template-columns: 1fr;
-  }
-
-  .hero,
-  .card {
-    padding: 1.1rem;
-  }
 }

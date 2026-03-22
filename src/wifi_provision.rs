@@ -136,10 +136,42 @@ enum ProvisionStatus {
 }
 
 #[derive(Clone)]
+struct ConnectProgress {
+    stage: String,
+    ssid: String,
+    attempt: u8,
+    total: u8,
+    message: String,
+}
+
+impl ConnectProgress {
+    fn new(ssid: String, total: u8) -> Self {
+        Self {
+            stage: "booting".to_owned(),
+            ssid,
+            attempt: 0,
+            total,
+            message: "Starting Wi-Fi services...".to_owned(),
+        }
+    }
+}
+
+#[derive(Clone)]
 struct DeviceSettings {
     ssid: String,
     device_label: String,
     temperature_offset_c: f32,
+}
+
+fn connect_progress_json(progress: &ConnectProgress) -> String {
+    format!(
+        "{{\"stage\":\"{}\",\"ssid\":\"{}\",\"attempt\":{},\"total\":{},\"message\":\"{}\"}}",
+        json_escape(&progress.stage),
+        json_escape(&progress.ssid),
+        progress.attempt,
+        progress.total,
+        json_escape(&progress.message),
+    )
 }
 
 fn build_id() -> &'static str {
@@ -300,15 +332,58 @@ pub fn setup_wifi(
             .try_into()
             .map_err(|_| anyhow!("Saved password is too long (max 64 chars)"))?;
 
-        wifi.set_configuration(&WifiConfig::Client(ClientConfiguration {
+        let client_config = ClientConfiguration {
             ssid: h_ssid,
             password: h_pass,
             auth_method: auth,
             ..Default::default()
-        }))?;
+        };
+        let ap_config = AccessPointConfiguration {
+            ssid: AP_SSID.try_into().map_err(|_| anyhow!("AP SSID error"))?,
+            auth_method: AuthMethod::None,
+            channel: 6,
+            ..Default::default()
+        };
+
+        wifi.set_configuration(&WifiConfig::Mixed(client_config, ap_config))?;
         wifi.start()?;
 
-        if try_connect(&mut wifi, &ssid) {
+        let connect_progress = Arc::new(Mutex::new(ConnectProgress::new(ssid.clone(), 5)));
+        {
+            let mut progress = lock_or_recover(&connect_progress);
+            progress.stage = "connecting".to_owned();
+            progress.message = format!("Trying '{}'...", ssid);
+        }
+        let connect_server = start_connecting_status_portal(
+            nvs_partition.clone(),
+            connect_progress.clone(),
+            build_id().to_owned(),
+            board_id(),
+        )?;
+
+        let mut connected = false;
+        for attempt in 1..=5 {
+            {
+                let mut progress = lock_or_recover(&connect_progress);
+                progress.stage = "connecting".to_owned();
+                progress.attempt = attempt;
+                progress.message = format!("Connecting to '{}' (attempt {attempt}/5)...", ssid);
+            }
+            println!("[wifi] Connect attempt {attempt}/5 to '{ssid}'...");
+            if wifi.connect().is_ok() {
+                connected = true;
+                break;
+            }
+            thread::sleep(Duration::from_secs(3));
+        }
+
+        if connected {
+            {
+                let mut progress = lock_or_recover(&connect_progress);
+                progress.stage = "connected".to_owned();
+                progress.message = format!("Connected to '{}'. Bringing dashboard online...", ssid);
+            }
+            drop(connect_server);
             wifi.wait_netif_up()?;
             let ps_err = unsafe {
                 esp_idf_svc::sys::esp_wifi_set_ps(esp_idf_svc::sys::wifi_ps_type_t_WIFI_PS_NONE)
@@ -348,6 +423,12 @@ pub fn setup_wifi(
         }
 
         println!("[wifi] Could not connect after retries. Starting provisioning portal...");
+        {
+            let mut progress = lock_or_recover(&connect_progress);
+            progress.stage = "failed".to_owned();
+            progress.message = "Could not connect after retries. Staying in setup mode.".to_owned();
+        }
+        drop(connect_server);
         wifi.stop()?;
     } else {
         println!("[wifi] No saved credentials. Starting provisioning portal...");
@@ -357,6 +438,151 @@ pub fn setup_wifi(
     Err(anyhow!(
         "Provisioning portal returned unexpectedly without reboot"
     ))
+}
+
+fn start_connecting_status_portal(
+    nvs_partition: EspDefaultNvsPartition,
+    progress: Arc<Mutex<ConnectProgress>>,
+    build_id_value: String,
+    board_id_value: String,
+) -> Result<EspHttpServer<'static>> {
+    let nvs_for_connect = nvs_partition.clone();
+    let progress_for_status = progress.clone();
+    let server_config = HttpConfig {
+        stack_size: 10240,
+        ..Default::default()
+    };
+    let mut server = EspHttpServer::new(&server_config)?;
+
+    for path in CAPTIVE_PATHS {
+        let build_id_for_page = build_id_value.clone();
+        let board_id_for_page = board_id_value.clone();
+        server.fn_handler(path, Method::Get, move |req| {
+            let html = web_assets::captive_index_html(&build_id_for_page, &board_id_for_page);
+            let headers = response_headers("text/html; charset=utf-8", "no-store");
+            req.into_response(200, Some("OK"), &headers)?
+                .write_all(html.as_bytes())?;
+            Ok::<_, anyhow::Error>(())
+        })?;
+    }
+
+    for path in ["/portal.css", "/portal.js"] {
+        server.fn_handler(path, Method::Get, move |req| {
+            let asset =
+                web_assets::captive_static(path).ok_or_else(|| anyhow!("missing {path} asset"))?;
+            let headers = response_headers(asset.content_type, asset.cache_control);
+            req.into_response(200, Some("OK"), &headers)?
+                .write_all(asset.body)?;
+            Ok::<_, anyhow::Error>(())
+        })?;
+    }
+
+    let static_routes: [(&str, fn() -> web_assets::StaticAsset); 2] = [
+        ("/base.css", web_assets::base_css),
+        ("/settings.css", web_assets::settings_css),
+    ];
+
+    for (path, asset_fn) in static_routes {
+        server.fn_handler(path, Method::Get, move |req| {
+            let asset = asset_fn();
+            let headers = response_headers(asset.content_type, asset.cache_control);
+            req.into_response(200, Some("OK"), &headers)?
+                .write_all(asset.body)?;
+            Ok::<_, anyhow::Error>(())
+        })?;
+    }
+
+    server.fn_handler("/status", Method::Get, move |req| {
+        let payload = connect_progress_json(&lock_or_recover(&progress_for_status));
+        let headers = response_headers("application/json; charset=utf-8", "no-store");
+        req.into_response(200, Some("OK"), &headers)?
+            .write_all(payload.as_bytes())?;
+        Ok::<_, anyhow::Error>(())
+    })?;
+
+    server.fn_handler("/networks", Method::Get, move |req| {
+        let settings = read_device_settings(&nvs_for_connect)?;
+        let networks = if settings.ssid.is_empty() {
+            Vec::new()
+        } else {
+            vec![settings.ssid]
+        };
+        let payload = networks_json(&networks);
+        let headers = response_headers("application/json; charset=utf-8", "no-store");
+        req.into_response(200, Some("OK"), &headers)?
+            .write_all(payload.as_bytes())?;
+        Ok::<_, anyhow::Error>(())
+    })?;
+
+    let nvs_for_handler = nvs_partition;
+    let build_for_handler = build_id_value;
+    let board_for_handler = board_id_value;
+    let progress_for_connect = progress;
+    server.fn_handler("/connect", Method::Post, move |mut req| {
+        let max_body_len = 512usize;
+        let body_str = match read_request_body_utf8(&mut req, max_body_len) {
+            Ok(body) => body,
+            Err(RequestBodyError::TooLarge) => {
+                let headers = response_headers("text/html; charset=utf-8", "no-store");
+                req.into_response(413, Some("Payload Too Large"), &headers)?.write_all(
+                    b"<html><body><p>Request body too large.</p><a href='/'>Go back</a></body></html>",
+                )?;
+                return Ok::<_, anyhow::Error>(());
+            }
+            Err(RequestBodyError::InvalidUtf8) => {
+                let headers = response_headers("text/html; charset=utf-8", "no-store");
+                req.into_response(400, Some("Bad Request"), &headers)?.write_all(
+                    b"<html><body><p>Request body must be valid UTF-8.</p><a href='/'>Go back</a></body></html>",
+                )?;
+                return Ok::<_, anyhow::Error>(());
+            }
+            Err(RequestBodyError::Io(err)) => return Err(err),
+        };
+
+        let ssid = parse_form_field(&body_str, "ssid").unwrap_or_default();
+        let pass = parse_form_field(&body_str, "password").unwrap_or_default();
+
+        if ssid.is_empty() {
+            let body =
+                b"<html><body><p>SSID cannot be empty.</p><a href='/'>Go back</a></body></html>";
+            let headers = response_headers("text/html; charset=utf-8", "no-store");
+            req.into_response(400, Some("Bad Request"), &headers)?
+                .write_all(body)?;
+            return Ok::<_, anyhow::Error>(());
+        }
+        if ssid.len() > MAX_SSID_LEN || pass.len() > MAX_PASS_LEN {
+            let body =
+                b"<html><body><p>SSID/password too long.</p><a href='/'>Go back</a></body></html>";
+            let headers = response_headers("text/html; charset=utf-8", "no-store");
+            req.into_response(400, Some("Bad Request"), &headers)?
+                .write_all(body)?;
+            return Ok::<_, anyhow::Error>(());
+        }
+
+        let nvs = EspNvs::new(nvs_for_handler.clone(), NVS_NAMESPACE, true)?;
+        nvs.set_str(NVS_SSID_KEY, &ssid)?;
+        nvs.set_str(NVS_PASS_KEY, &pass)?;
+        {
+            let mut state = lock_or_recover(&progress_for_connect);
+            state.stage = "rebooting".to_owned();
+            state.ssid = ssid.clone();
+            state.message = format!("Saved credentials for '{}'. Rebooting...", ssid);
+        }
+
+        let success_html = web_assets::captive_success_html(&build_for_handler, &board_for_handler);
+        let headers = response_headers("text/html; charset=utf-8", "no-store");
+        req.into_response(200, Some("OK"), &headers)?
+            .write_all(success_html.as_bytes())?;
+
+        thread::spawn(|| {
+            thread::sleep(Duration::from_millis(1200));
+            unsafe { esp_idf_svc::sys::esp_restart() };
+        });
+
+        Ok::<_, anyhow::Error>(())
+    })?;
+
+    Ok(server)
 }
 
 // ---------------------------------------------------------------------------
@@ -377,20 +603,6 @@ fn read_saved_credentials(
     let pass = nvs.get_str(NVS_PASS_KEY, &mut pass_buf)?.map(str::to_owned);
 
     Ok((ssid, pass))
-}
-
-/// Attempts to connect to a WiFi network up to 5 times.
-/// Returns `true` on success.
-fn try_connect(wifi: &mut BlockingWifi<EspWifi<'static>>, ssid: &str) -> bool {
-    for attempt in 1..=5 {
-        println!("[wifi] Connect attempt {attempt}/5 to '{ssid}'...");
-        if wifi.connect().is_ok() {
-            println!("[wifi] Connected to '{ssid}'.");
-            return true;
-        }
-        thread::sleep(Duration::from_secs(3));
-    }
-    false
 }
 
 #[cfg(any(esp_idf_comp_mdns_enabled, esp_idf_comp_espressif__mdns_enabled))]
@@ -482,10 +694,49 @@ fn run_captive_portal(
         })?;
     }
 
+    let static_routes: [(&str, fn() -> web_assets::StaticAsset); 2] = [
+        ("/base.css", web_assets::base_css),
+        ("/settings.css", web_assets::settings_css),
+    ];
+
+    for (path, asset_fn) in static_routes {
+        server.fn_handler(path, Method::Get, move |req| {
+            let asset = asset_fn();
+            let headers = response_headers(asset.content_type, asset.cache_control);
+            req.into_response(200, Some("OK"), &headers)?
+                .write_all(asset.body)?;
+            Ok::<_, anyhow::Error>(())
+        })?;
+    }
+
     server.fn_handler("/networks", Method::Get, move |req| {
         *lock_or_recover(&scan_requested_for_handler) = true;
         let networks = lock_or_recover(&networks_for_handler).clone();
         let payload = networks_json(&networks);
+        let headers = response_headers("application/json; charset=utf-8", "no-store");
+        req.into_response(200, Some("OK"), &headers)?
+            .write_all(payload.as_bytes())?;
+        Ok::<_, anyhow::Error>(())
+    })?;
+
+    let status_for_get = status.clone();
+    server.fn_handler("/status", Method::Get, move |req| {
+        let state = lock_or_recover(&status_for_get);
+        let (stage, message) = match &*state {
+            ProvisionStatus::Idle => (
+                "provisioning",
+                "Waiting for Wi-Fi credentials.",
+            ),
+            ProvisionStatus::Rebooting => (
+                "rebooting",
+                "Saved credentials. Rebooting now...",
+            ),
+        };
+        let payload = format!(
+            "{{\"stage\":\"{}\",\"ssid\":\"\",\"attempt\":0,\"total\":5,\"message\":\"{}\"}}",
+            stage,
+            message,
+        );
         let headers = response_headers("application/json; charset=utf-8", "no-store");
         req.into_response(200, Some("OK"), &headers)?
             .write_all(payload.as_bytes())?;
