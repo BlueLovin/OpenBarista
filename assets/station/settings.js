@@ -1,11 +1,15 @@
 const settingsForm = document.getElementById("deviceSettingsForm");
 const saveSettingsBtn = document.getElementById("saveSettingsBtn");
+const saveWifiBtn = document.getElementById("saveWifiBtn");
 const settingsStatusEl = document.getElementById("settingsStatus");
 const networkStatusEl = document.getElementById("networkStatus");
 const refreshNetworksBtn = document.getElementById("refreshNetworksBtn");
 const deviceLabelInput = document.getElementById("deviceLabelInput");
 const ssidSelect = document.getElementById("ssidSelect");
 const passwordInput = document.getElementById("passwordInput");
+const temperatureOffsetInput = document.getElementById(
+  "temperatureOffsetInput",
+);
 const buildIdEl = document.getElementById("buildId");
 const boardIdEl = document.getElementById("boardId");
 const directIpEl = document.getElementById("directIp");
@@ -98,6 +102,13 @@ async function loadSettings() {
     if (typeof data.ssid === "string") {
       currentSavedSsid = data.ssid;
     }
+    if (
+      temperatureOffsetInput &&
+      typeof data.temperature_offset_c === "number" &&
+      Number.isFinite(data.temperature_offset_c)
+    ) {
+      temperatureOffsetInput.value = data.temperature_offset_c.toFixed(1);
+    }
     renderSsidOptions(currentSavedSsid ? [currentSavedSsid] : []);
     if (buildIdEl && typeof data.build_id === "string") {
       buildIdEl.textContent = data.build_id;
@@ -116,7 +127,7 @@ async function loadSettings() {
     }
 
     setStatus("Settings loaded.");
-    loadNetworks();
+    setNetworkStatus("Click Refresh to scan nearby Wi-Fi networks.");
   } catch (_err) {
     setStatus("Could not load settings right now.", true);
     renderSsidOptions([]);
@@ -126,18 +137,33 @@ async function loadSettings() {
 
 async function saveSettings(ev) {
   ev.preventDefault();
-  if (!saveSettingsBtn) return;
+  if (!saveSettingsBtn || !saveWifiBtn) return;
+
+  const submitter = ev.submitter;
+  const saveMode = submitter?.dataset?.saveMode === "wifi" ? "wifi" : "device";
+  const updatingWifi = saveMode === "wifi";
 
   const body = new URLSearchParams();
   body.set(
     "device_label",
     deviceLabelInput ? deviceLabelInput.value.trim() : "",
   );
-  body.set("ssid", ssidSelect ? ssidSelect.value : "");
-  body.set("password", passwordInput ? passwordInput.value : "");
+  body.set("wifi_update", updatingWifi ? "1" : "0");
+  body.set("ssid", updatingWifi && ssidSelect ? ssidSelect.value : "");
+  body.set(
+    "password",
+    updatingWifi && passwordInput ? passwordInput.value : "",
+  );
+  body.set(
+    "temperature_offset_c",
+    temperatureOffsetInput ? temperatureOffsetInput.value.trim() || "0" : "0",
+  );
 
   saveSettingsBtn.disabled = true;
-  setStatus("Saving settings...");
+  saveWifiBtn.disabled = true;
+  setStatus(
+    updatingWifi ? "Applying Wi-Fi changes..." : "Saving device settings...",
+  );
 
   try {
     const resp = await fetch("/api/settings", {
@@ -158,12 +184,15 @@ async function saveSettings(ev) {
     if (payload.rebooting) {
       setStatus("Saved. Rebooting now to apply Wi-Fi settings...");
     } else {
-      setStatus("Saved successfully.");
+      setStatus(
+        updatingWifi ? "Wi-Fi settings saved." : "Device settings saved.",
+      );
     }
   } catch (err) {
     setStatus(`Save failed: ${err.message || "unknown error"}`, true);
   } finally {
     saveSettingsBtn.disabled = false;
+    saveWifiBtn.disabled = false;
   }
 }
 

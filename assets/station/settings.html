@@ -59,9 +59,44 @@
             name="password"
             type="password"
             maxlength="64"
+            placeholder="Only needed when changing Wi-Fi"
           />
 
-          <button id="saveSettingsBtn" type="submit">Save Settings</button>
+          <button
+            id="saveWifiBtn"
+            type="submit"
+            class="btn-secondary btn-block"
+            data-save-mode="wifi"
+          >
+            Update Wi-Fi
+          </button>
+
+          <label for="temperatureOffsetInput">Temperature offset (C)</label>
+          <input
+            id="temperatureOffsetInput"
+            name="temperature_offset_c"
+            type="number"
+            inputmode="decimal"
+            step="0.1"
+            min="-20"
+            max="20"
+            placeholder="0.0"
+          />
+
+          <details class="offset-help">
+            <summary>How do I set this offset?</summary>
+            <p>
+              Use a proper ice bath: fill a cup with crushed ice, add a little
+              water, stir, and wait until the reading stabilizes.
+            </p>
+            <p>
+              Then set offset so it reads 0.0 C. If it reads -4.6 C, enter +4.6.
+            </p>
+          </details>
+
+          <button id="saveSettingsBtn" type="submit" data-save-mode="device">
+            Save Device Settings
+          </button>
           <p id="settingsStatus" class="status">Loading settings...</p>
         </form>
       </section>

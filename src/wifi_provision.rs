@@ -17,7 +17,7 @@ use esp_idf_svc::{
         server::{Configuration as HttpConfig, EspHttpServer},
         Method,
     },
-    io::Write,
+    io::{Read, Write},
     netif::{EspNetif, NetifConfiguration},
     nvs::{EspDefaultNvsPartition, EspNvs},
     wifi::{
@@ -34,11 +34,13 @@ const NVS_SSID_KEY: &str = "ssid";
 const NVS_PASS_KEY: &str = "pass";
 const SETTINGS_NAMESPACE: &str = "settings";
 const SETTINGS_LABEL_KEY: &str = "label";
+const SETTINGS_TEMP_OFFSET_KEY: &str = "temp_offset_c";
 
 const AP_SSID: &str = "OpenBarista";
 const MAX_SSID_LEN: usize = 32;
 const MAX_PASS_LEN: usize = 64;
 const MAX_LABEL_LEN: usize = 32;
+const MAX_TEMP_OFFSET_ABS_C: f32 = 20.0;
 const AP_GATEWAY: Ipv4Addr = Ipv4Addr::new(192, 168, 4, 1);
 #[cfg(any(esp_idf_comp_mdns_enabled, esp_idf_comp_espressif__mdns_enabled))]
 const MDNS_HOSTNAME: &str = "openbarista";
@@ -89,10 +91,42 @@ fn station_response_headers<'a>(
 }
 
 fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    match mutex.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
+    mutex
+        .lock()
+        .expect("mutex poisoned: refusing to continue with potentially inconsistent state")
+}
+
+enum RequestBodyError {
+    TooLarge,
+    InvalidUtf8,
+    Io(anyhow::Error),
+}
+
+fn read_request_body_utf8<R: Read>(
+    reader: &mut R,
+    max_body_len: usize,
+) -> std::result::Result<String, RequestBodyError> {
+    let mut body = Vec::with_capacity(max_body_len);
+
+    loop {
+        let mut buf = [0u8; 128];
+        let n = reader
+            .read(&mut buf)
+            .map_err(|err| RequestBodyError::Io(anyhow!("request body read failed: {err:?}")))?;
+        if n == 0 {
+            break;
+        }
+
+        let remaining = max_body_len.saturating_sub(body.len());
+        if n > remaining {
+            return Err(RequestBodyError::TooLarge);
+        }
+
+        body.extend_from_slice(&buf[..n]);
     }
+
+    let body_str = std::str::from_utf8(&body).map_err(|_| RequestBodyError::InvalidUtf8)?;
+    Ok(body_str.to_owned())
 }
 
 #[derive(Clone)]
@@ -105,6 +139,7 @@ enum ProvisionStatus {
 struct DeviceSettings {
     ssid: String,
     device_label: String,
+    temperature_offset_c: f32,
 }
 
 fn build_id() -> &'static str {
@@ -138,12 +173,28 @@ fn read_device_settings(nvs_partition: &EspDefaultNvsPartition) -> Result<Device
         .unwrap_or("OpenBarista")
         .to_owned();
 
-    Ok(DeviceSettings { ssid, device_label })
+    let mut temp_offset_buf = [0u8; 24];
+    let temperature_offset_c = nvs_settings
+        .get_str(SETTINGS_TEMP_OFFSET_KEY, &mut temp_offset_buf)?
+        .and_then(|value| value.parse::<f32>().ok())
+        .unwrap_or(0.0);
+
+    Ok(DeviceSettings {
+        ssid,
+        device_label,
+        temperature_offset_c,
+    })
 }
 
 fn save_device_label(nvs_partition: &EspDefaultNvsPartition, device_label: &str) -> Result<()> {
     let nvs_settings = EspNvs::new(nvs_partition.clone(), SETTINGS_NAMESPACE, true)?;
     nvs_settings.set_str(SETTINGS_LABEL_KEY, device_label)?;
+    Ok(())
+}
+
+fn save_temperature_offset(nvs_partition: &EspDefaultNvsPartition, temperature_offset_c: f32) -> Result<()> {
+    let nvs_settings = EspNvs::new(nvs_partition.clone(), SETTINGS_NAMESPACE, true)?;
+    nvs_settings.set_str(SETTINGS_TEMP_OFFSET_KEY, &format!("{temperature_offset_c:.3}"))?;
     Ok(())
 }
 
@@ -164,6 +215,7 @@ pub struct WifiStack {
 pub struct WifiRuntime {
     pub stack: WifiStack,
     pub station_http_server: EspHttpServer<'static>,
+    temperature_offset_c: Arc<Mutex<f32>>,
 }
 
 impl WifiRuntime {
@@ -182,6 +234,10 @@ impl WifiRuntime {
         );
         #[cfg(any(esp_idf_comp_mdns_enabled, esp_idf_comp_espressif__mdns_enabled))]
         println!("[wifi] mDNS keepalive handle active ({} bytes).", mdns_size);
+    }
+
+    pub fn temperature_offset_c(&self) -> f32 {
+        *lock_or_recover(&self.temperature_offset_c)
     }
 }
 
@@ -206,6 +262,8 @@ pub fn setup_wifi(
     let sysloop = EspSystemEventLoop::take()?;
     let nvs_partition = EspDefaultNvsPartition::take()?;
     let nvs_for_station_server = nvs_partition.clone();
+    let initial_settings = read_device_settings(&nvs_for_station_server)?;
+    let temperature_offset_c = Arc::new(Mutex::new(initial_settings.temperature_offset_c));
     // Read any previously saved credentials from NVS.
     let (saved_ssid, saved_pass) = read_saved_credentials(&nvs_partition)?;
 
@@ -272,11 +330,18 @@ pub fn setup_wifi(
                 mdns: start_mdns()?,
             };
             let station_http_server =
-                start_station_http_server(&ip_addr, telemetry, nvs_for_station_server, wifi)?;
+                start_station_http_server(
+                    &ip_addr,
+                    telemetry,
+                    nvs_for_station_server,
+                    wifi,
+                    temperature_offset_c.clone(),
+                )?;
 
             let runtime = WifiRuntime {
                 stack,
                 station_http_server,
+                temperature_offset_c,
             };
             runtime.log_keepalive_state();
             return Ok(runtime);
@@ -360,7 +425,7 @@ fn run_captive_portal(
 
     // Route hostname lookups to the AP so Android/iOS captive checks can
     // resolve and hit the portal endpoints.
-    start_captive_dns(AP_GATEWAY)?;
+    let dns_thread = start_captive_dns(AP_GATEWAY)?;
 
     let ap_ip = wifi.wifi().ap_netif().get_ip_info()?.ip;
 
@@ -429,26 +494,27 @@ fn run_captive_portal(
 
     server.fn_handler("/connect", Method::Post, move |mut req| {
         let max_body_len = 512usize;
-        let mut body = Vec::new();
-        body.reserve(max_body_len);
-
-        loop {
-            if body.len() >= max_body_len {
-                break;
+        let body_str = match read_request_body_utf8(&mut req, max_body_len) {
+            Ok(body) => body,
+            Err(RequestBodyError::TooLarge) => {
+                let headers = response_headers("text/html; charset=utf-8", "no-store");
+                req.into_response(413, Some("Payload Too Large"), &headers)?.write_all(
+                    b"<html><body><p>Request body too large.</p><a href='/'>Go back</a></body></html>",
+                )?;
+                return Ok::<_, anyhow::Error>(());
             }
-            let mut buf = [0u8; 128];
-            let n = req.read(&mut buf)?;
-            if n == 0 {
-                break;
+            Err(RequestBodyError::InvalidUtf8) => {
+                let headers = response_headers("text/html; charset=utf-8", "no-store");
+                req.into_response(400, Some("Bad Request"), &headers)?.write_all(
+                    b"<html><body><p>Request body must be valid UTF-8.</p><a href='/'>Go back</a></body></html>",
+                )?;
+                return Ok::<_, anyhow::Error>(());
             }
-            let remaining = max_body_len - body.len();
-            let to_copy = n.min(remaining);
-            body.extend_from_slice(&buf[..to_copy]);
-        }
+            Err(RequestBodyError::Io(err)) => return Err(err),
+        };
 
-        let body_str = std::str::from_utf8(&body).unwrap_or("");
-        let ssid = parse_form_field(body_str, "ssid").unwrap_or_default();
-        let pass = parse_form_field(body_str, "password").unwrap_or_default();
+        let ssid = parse_form_field(&body_str, "ssid").unwrap_or_default();
+        let pass = parse_form_field(&body_str, "password").unwrap_or_default();
 
         if ssid.is_empty() {
             let body =
@@ -486,6 +552,7 @@ fn run_captive_portal(
             // Give the HTTP response enough time to flush before restarting.
             thread::sleep(Duration::from_millis(1500));
             drop(server);
+            drop(dns_thread);
             unsafe { esp_idf_svc::sys::esp_restart() };
         }
 
@@ -507,6 +574,7 @@ pub fn start_station_http_server(
     telemetry: SharedTelemetry,
     nvs_partition: EspDefaultNvsPartition,
     wifi: Arc<Mutex<BlockingWifi<EspWifi<'static>>>>,
+    temperature_offset_c: Arc<Mutex<f32>>,
 ) -> Result<EspHttpServer<'static>> {
     let build_id_value = build_id().to_owned();
     let board_id_value = board_id();
@@ -622,30 +690,64 @@ pub fn start_station_http_server(
     let ip_for_post = ip_addr.to_owned();
     let build_for_post = build_id_value.clone();
     let board_for_post = board_id_value.clone();
+    let temperature_offset_for_post = temperature_offset_c.clone();
     server.fn_handler("/api/settings", Method::Post, move |mut req| {
         let max_body_len = 512usize;
-        let mut body = Vec::new();
-        body.reserve(max_body_len);
-
-        loop {
-            if body.len() >= max_body_len {
-                break;
+        let body_str = match read_request_body_utf8(&mut req, max_body_len) {
+            Ok(body) => body,
+            Err(RequestBodyError::TooLarge) => {
+                let payload = settings_json(
+                    &read_device_settings(&nvs_for_post)?,
+                    &ip_for_post,
+                    &build_for_post,
+                    &board_for_post,
+                    false,
+                    "Request body too large.",
+                    false,
+                );
+                let headers = response_headers("application/json; charset=utf-8", "no-store");
+                req.into_response(413, Some("Payload Too Large"), &headers)?
+                    .write_all(payload.as_bytes())?;
+                return Ok::<_, anyhow::Error>(());
             }
-            let mut buf = [0u8; 128];
-            let n = req.read(&mut buf)?;
-            if n == 0 {
-                break;
+            Err(RequestBodyError::InvalidUtf8) => {
+                let payload = settings_json(
+                    &read_device_settings(&nvs_for_post)?,
+                    &ip_for_post,
+                    &build_for_post,
+                    &board_for_post,
+                    false,
+                    "Request body must be valid UTF-8.",
+                    false,
+                );
+                let headers = response_headers("application/json; charset=utf-8", "no-store");
+                req.into_response(400, Some("Bad Request"), &headers)?
+                    .write_all(payload.as_bytes())?;
+                return Ok::<_, anyhow::Error>(());
             }
-            let remaining = max_body_len - body.len();
-            let to_copy = n.min(remaining);
-            body.extend_from_slice(&buf[..to_copy]);
-        }
+            Err(RequestBodyError::Io(err)) => return Err(err),
+        };
 
-        let body_str = std::str::from_utf8(&body).unwrap_or("");
-        let ssid = parse_form_field(body_str, "ssid").unwrap_or_default();
-        let pass = parse_form_field(body_str, "password").unwrap_or_default();
-        let device_label = parse_form_field(body_str, "device_label")
+        let wifi_update_requested = matches!(
+            parse_form_field(&body_str, "wifi_update").as_deref(),
+            Some("1") | Some("true") | Some("on")
+        );
+        let ssid = if wifi_update_requested {
+            parse_form_field(&body_str, "ssid").unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let pass = if wifi_update_requested {
+            parse_form_field(&body_str, "password").unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let device_label = parse_form_field(&body_str, "device_label")
             .unwrap_or_else(|| "OpenBarista".to_owned())
+            .trim()
+            .to_owned();
+        let offset_str = parse_form_field(&body_str, "temperature_offset_c")
+            .unwrap_or_else(|| "0".to_owned())
             .trim()
             .to_owned();
         let device_label = if device_label.is_empty() {
@@ -653,10 +755,45 @@ pub fn start_station_http_server(
         } else {
             device_label
         };
+        let parsed_temperature_offset_c = match offset_str.parse::<f32>() {
+            Ok(value) => value,
+            Err(_) => {
+                let payload = settings_json(
+                    &read_device_settings(&nvs_for_post)?,
+                    &ip_for_post,
+                    &build_for_post,
+                    &board_for_post,
+                    false,
+                    "Temperature offset must be a number.",
+                    false,
+                );
+                let headers = response_headers("application/json; charset=utf-8", "no-store");
+                req.into_response(400, Some("Bad Request"), &headers)?
+                    .write_all(payload.as_bytes())?;
+                return Ok::<_, anyhow::Error>(());
+            }
+        };
 
-        if ssid.len() > MAX_SSID_LEN
-            || pass.len() > MAX_PASS_LEN
+        if wifi_update_requested && ssid.is_empty() {
+            let payload = settings_json(
+                &read_device_settings(&nvs_for_post)?,
+                &ip_for_post,
+                &build_for_post,
+                &board_for_post,
+                false,
+                "Select a Wi-Fi network to apply network changes.",
+                false,
+            );
+            let headers = response_headers("application/json; charset=utf-8", "no-store");
+            req.into_response(400, Some("Bad Request"), &headers)?
+                .write_all(payload.as_bytes())?;
+            return Ok::<_, anyhow::Error>(());
+        }
+
+        if (wifi_update_requested && (ssid.len() > MAX_SSID_LEN || pass.len() > MAX_PASS_LEN))
             || device_label.len() > MAX_LABEL_LEN
+            || !parsed_temperature_offset_c.is_finite()
+            || parsed_temperature_offset_c.abs() > MAX_TEMP_OFFSET_ABS_C
         {
             let payload = settings_json(
                 &read_device_settings(&nvs_for_post)?,
@@ -664,7 +801,7 @@ pub fn start_station_http_server(
                 &build_for_post,
                 &board_for_post,
                 false,
-                "One or more fields exceeded maximum length.",
+                "One or more fields are invalid or out of range.",
                 false,
             );
             let headers = response_headers("application/json; charset=utf-8", "no-store");
@@ -675,8 +812,10 @@ pub fn start_station_http_server(
 
         let mut rebooting = false;
         save_device_label(&nvs_for_post, &device_label)?;
+        save_temperature_offset(&nvs_for_post, parsed_temperature_offset_c)?;
+        *lock_or_recover(&temperature_offset_for_post) = parsed_temperature_offset_c;
 
-        if !ssid.is_empty() {
+        if wifi_update_requested {
             let nvs_wifi = EspNvs::new(nvs_for_post.clone(), NVS_NAMESPACE, true)?;
             nvs_wifi.set_str(NVS_SSID_KEY, &ssid)?;
             nvs_wifi.set_str(NVS_PASS_KEY, &pass)?;
@@ -693,7 +832,7 @@ pub fn start_station_http_server(
             if rebooting {
                 "Settings saved. Rebooting to apply network changes."
             } else {
-                "Settings saved."
+                "Device settings saved."
             },
             rebooting,
         );
@@ -781,12 +920,13 @@ fn settings_json(
     rebooting: bool,
 ) -> String {
     format!(
-        "{{\"ok\":{},\"message\":\"{}\",\"rebooting\":{},\"ssid\":\"{}\",\"device_label\":\"{}\",\"ip_addr\":\"{}\",\"build_id\":\"{}\",\"board_id\":\"{}\"}}",
+        "{{\"ok\":{},\"message\":\"{}\",\"rebooting\":{},\"ssid\":\"{}\",\"device_label\":\"{}\",\"temperature_offset_c\":{:.3},\"ip_addr\":\"{}\",\"build_id\":\"{}\",\"board_id\":\"{}\"}}",
         if ok { "true" } else { "false" },
         json_escape(message),
         if rebooting { "true" } else { "false" },
         json_escape(&settings.ssid),
         json_escape(&settings.device_label),
+        settings.temperature_offset_c,
         json_escape(ip_addr),
         json_escape(build_id),
         json_escape(board_id),
@@ -873,7 +1013,9 @@ fn start_captive_dns(ap_gateway: Ipv4Addr) -> Result<thread::JoinHandle<()>> {
             match socket.recv_from(&mut rx) {
                 Ok((len, peer)) => {
                     if let Some(reply) = build_dns_reply(&rx[..len], ap_gateway) {
-                        let _ = socket.send_to(&reply, peer);
+                        if let Err(err) = socket.send_to(&reply, peer) {
+                            println!("[wifi] Captive DNS send error: {err}");
+                        }
                     }
                 }
                 Err(err) if matches!(err.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
@@ -955,82 +1097,12 @@ fn build_dns_reply(query: &[u8], ap_gateway: Ipv4Addr) -> Option<Vec<u8>> {
 // ---------------------------------------------------------------------------
 
 fn parse_form_field(body: &str, key: &str) -> Option<String> {
-    body.split('&')
-        .filter_map(|part| part.split_once('='))
-        .find(|(k, _)| *k == key)
-        .map(|(_, v)| url_decode(v))
-}
-
-/// Decodes a percent-encoded URL component (`+` → space, `%XX` → byte).
-/// Handles UTF-8 encoded multibyte sequences correctly.
-fn url_decode(s: &str) -> String {
-    let mut bytes: Vec<u8> = Vec::with_capacity(s.len());
-    let src = s.as_bytes();
-    let mut i = 0;
-    while i < src.len() {
-        match src[i] {
-            b'+' => {
-                bytes.push(b' ');
-                i += 1;
-            }
-            b'%' if i + 2 < src.len() => {
-                // SAFETY: src[i+1..i+3] are ASCII hex digits or we fall through.
-                if let Ok(byte) =
-                    u8::from_str_radix(std::str::from_utf8(&src[i + 1..i + 3]).unwrap_or(""), 16)
-                {
-                    bytes.push(byte);
-                    i += 3;
-                } else {
-                    bytes.push(b'%');
-                    i += 1;
-                }
-            }
-            b => {
-                bytes.push(b);
-                i += 1;
-            }
-        }
-    }
-    String::from_utf8_lossy(&bytes).into_owned()
+    form_urlencoded::parse(body.as_bytes())
+        .find_map(|(k, v)| if k == key { Some(v.into_owned()) } else { None })
 }
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn test_url_decode_plus_and_space() {
-        assert_eq!(url_decode("hello+world"), "hello world");
-        assert_eq!(url_decode("a+b+c"), "a b c");
-    }
-
-    #[test]
-    fn test_url_decode_percent_encoding() {
-        // Space
-        assert_eq!(url_decode("a%20b"), "a b");
-        // Plus sign encoded
-        assert_eq!(url_decode("a%2Bb"), "a+b");
-        // Multibyte UTF-8: "✓" (check mark, U+2713) is 0xE2 0x9C 0x93
-        assert_eq!(url_decode("%E2%9C%93"), "✓");
-    }
-
-    #[test]
-    fn test_url_decode_malformed_percent_sequences() {
-        // Lone '%' at end should be preserved
-        assert_eq!(url_decode("abc%"), "abc%");
-        // '%' with only one following char should be preserved
-        assert_eq!(url_decode("abc%2"), "abc%2");
-        // '%' followed by non-hex characters: the implementation falls back
-        // to treating '%' as a literal and then copying the rest verbatim.
-        assert_eq!(url_decode("%GZ"), "%GZ");
-        assert_eq!(url_decode("foo%XYbar"), "foo%XYbar");
-    }
-
-    #[test]
-    fn test_url_decode_non_utf8_bytes() {
-        // 0xFF is not valid UTF-8 by itself; from_utf8_lossy will replace it
-        // with U+FFFD (�).
-        assert_eq!(url_decode("%FF"), "�");
-    }
-
     #[test]
     fn test_parse_form_field_basic() {
         let body = "ssid=my%20network&password=secret+pass";

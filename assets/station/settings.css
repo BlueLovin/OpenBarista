@@ -92,6 +92,40 @@ h2 {
   box-shadow: 0 12px 30px rgba(255, 122, 47, 0.35);
 }
 
+.btn-block {
+  width: 100%;
+  margin: 2px 0 12px;
+  padding: 10px 12px;
+}
+
+#saveWifiBtn:disabled,
+#saveSettingsBtn:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+.offset-help {
+  margin: -2px 0 12px;
+  padding: 8px 10px;
+  border: 1px dashed #345078;
+  border-radius: 10px;
+  background: rgba(20, 30, 48, 0.6);
+}
+
+.offset-help summary {
+  cursor: pointer;
+  color: #a9c6ff;
+  font-size: 0.76rem;
+  letter-spacing: 0.02em;
+}
+
+.offset-help p {
+  margin: 8px 0 0;
+  color: #b9cae8;
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
 #saveSettingsBtn:disabled {
   opacity: 0.65;
   cursor: wait;

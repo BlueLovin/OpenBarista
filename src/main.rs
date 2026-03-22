@@ -45,7 +45,7 @@ fn main() -> Result<()> {
         peripherals.spi2,
         pins.gpio18,
         pins.gpio23,
-        Some(pins.gpio20),
+        Some(pins.gpio19),
         &spi::config::DriverConfig::new(),
     )?;
 
@@ -69,7 +69,18 @@ fn main() -> Result<()> {
     )?;
     let mut pressure_sensor = PressureSensor::new(pressure_sensor_channel);
 
+    let mut applied_temperature_offset_c = wifi_runtime.temperature_offset_c();
+    temperature_sensor.set_calibration_offset_c(applied_temperature_offset_c);
+    println!("[temp] Applied calibration offset: {applied_temperature_offset_c:.3} C");
+
     loop {
+        let configured_temperature_offset_c = wifi_runtime.temperature_offset_c();
+        if (configured_temperature_offset_c - applied_temperature_offset_c).abs() > 1e-6 {
+            temperature_sensor.set_calibration_offset_c(configured_temperature_offset_c);
+            applied_temperature_offset_c = configured_temperature_offset_c;
+            println!("[temp] Applied calibration offset: {configured_temperature_offset_c:.3} C");
+        }
+
         let temperature = temperature_sensor.read_temperature_c()?;
         let pressure = pressure_sensor.read()?;
 

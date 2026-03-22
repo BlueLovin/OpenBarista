@@ -1216,6 +1216,7 @@ dependencies = [
  "embuild",
  "esp-idf-hal",
  "esp-idf-svc",
+ "form_urlencoded",
 ]
 
 [[package]]

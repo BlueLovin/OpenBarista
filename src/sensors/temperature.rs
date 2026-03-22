@@ -56,6 +56,10 @@ where
         Ok(TemperatureReading { temperature_c })
     }
 
+    pub fn set_calibration_offset_c(&mut self, calibration_offset_c: f32) {
+        self.calibration_offset_c = calibration_offset_c;
+    }
+
     fn initialize(&mut self) -> Result<()> {
         self.clear_fault()?;
         self.set_wire_mode()?;

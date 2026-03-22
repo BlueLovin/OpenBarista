@@ -56,7 +56,7 @@ The project is currently set up for the following hardware arrangement.
 Configuration used by the firmware:
 
 - PT100 nominal resistance: 100.0 ohm
-- Reference resistor: 430.0 ohm
+- Reference resistor: 431.0 ohm
 - Calibration offset: +4.0 C
 - SPI mode: 1
 
@@ -210,7 +210,7 @@ Current calibration and conversion values are hard-coded in the firmware.
 Temperature:
 
 - PT100 nominal resistance: 100.0 ohm
-- Reference resistor: 430.0 ohm
+- Reference resistor: 431.0 ohm
 - Offset: +4.0 C
 
 Pressure:
