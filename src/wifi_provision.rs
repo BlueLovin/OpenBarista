@@ -354,6 +354,7 @@ pub fn setup_wifi(
             progress.stage = "connecting".to_owned();
             progress.message = format!("Trying '{}'...", ssid);
         }
+        let connect_dns_thread = start_captive_dns(AP_GATEWAY)?;
         let connect_server = start_connecting_status_portal(
             nvs_partition.clone(),
             connect_progress.clone(),
@@ -384,6 +385,7 @@ pub fn setup_wifi(
                 progress.message = format!("Connected to '{}'. Bringing dashboard online...", ssid);
             }
             drop(connect_server);
+            drop(connect_dns_thread);
             wifi.wait_netif_up()?;
             let ps_err = unsafe {
                 esp_idf_svc::sys::esp_wifi_set_ps(esp_idf_svc::sys::wifi_ps_type_t_WIFI_PS_NONE)
@@ -429,6 +431,7 @@ pub fn setup_wifi(
             progress.message = "Could not connect after retries. Staying in setup mode.".to_owned();
         }
         drop(connect_server);
+        drop(connect_dns_thread);
         wifi.stop()?;
     } else {
         println!("[wifi] No saved credentials. Starting provisioning portal...");
@@ -969,11 +972,13 @@ pub fn start_station_http_server(
             Err(RequestBodyError::Io(err)) => return Err(err),
         };
 
+        let existing_settings = read_device_settings(&nvs_for_post)?;
+
         let wifi_update_requested = matches!(
             parse_form_field(&body_str, "wifi_update").as_deref(),
             Some("1") | Some("true") | Some("on")
         );
-        let ssid = if wifi_update_requested {
+        let requested_ssid = if wifi_update_requested {
             parse_form_field(&body_str, "ssid").unwrap_or_default()
         } else {
             String::new()
@@ -982,6 +987,11 @@ pub fn start_station_http_server(
             parse_form_field(&body_str, "password").unwrap_or_default()
         } else {
             String::new()
+        };
+        let ssid = if wifi_update_requested && requested_ssid.is_empty() {
+            existing_settings.ssid.clone()
+        } else {
+            requested_ssid
         };
         let device_label = parse_form_field(&body_str, "device_label")
             .unwrap_or_else(|| "OpenBarista".to_owned())
@@ -1015,14 +1025,16 @@ pub fn start_station_http_server(
             }
         };
 
-        if wifi_update_requested && ssid.is_empty() {
+        let wifi_change_requested = wifi_update_requested && (!ssid.is_empty() || !pass.is_empty());
+
+        if wifi_update_requested && wifi_change_requested && ssid.is_empty() {
             let payload = settings_json(
-                &read_device_settings(&nvs_for_post)?,
+                &existing_settings,
                 &ip_for_post,
                 &build_for_post,
                 &board_for_post,
                 false,
-                "Select a Wi-Fi network to apply network changes.",
+                "No current Wi-Fi network is saved yet. Select a network first.",
                 false,
             );
             let headers = response_headers("application/json; charset=utf-8", "no-store");
@@ -1031,7 +1043,7 @@ pub fn start_station_http_server(
             return Ok::<_, anyhow::Error>(());
         }
 
-        if (wifi_update_requested && (ssid.len() > MAX_SSID_LEN || pass.len() > MAX_PASS_LEN))
+        if (wifi_change_requested && (ssid.len() > MAX_SSID_LEN || pass.len() > MAX_PASS_LEN))
             || device_label.len() > MAX_LABEL_LEN
             || !parsed_temperature_offset_c.is_finite()
             || parsed_temperature_offset_c.abs() > MAX_TEMP_OFFSET_ABS_C
@@ -1056,7 +1068,7 @@ pub fn start_station_http_server(
         save_temperature_offset(&nvs_for_post, parsed_temperature_offset_c)?;
         *lock_or_recover(&temperature_offset_for_post) = parsed_temperature_offset_c;
 
-        if wifi_update_requested {
+        if wifi_change_requested {
             let nvs_wifi = EspNvs::new(nvs_for_post.clone(), NVS_NAMESPACE, true)?;
             nvs_wifi.set_str(NVS_SSID_KEY, &ssid)?;
             nvs_wifi.set_str(NVS_PASS_KEY, &pass)?;
@@ -1072,6 +1084,8 @@ pub fn start_station_http_server(
             true,
             if rebooting {
                 "Settings saved. Rebooting to apply network changes."
+            } else if wifi_update_requested {
+                "No Wi-Fi changes requested."
             } else {
                 "Device settings saved."
             },
