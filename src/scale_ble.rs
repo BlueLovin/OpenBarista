@@ -1182,12 +1182,12 @@ async fn subscribe_weight_notifications(
     });
 
     if characteristic.can_indicate() && !characteristic.can_notify() {
-        characteristic.subscribe_indicate(false).await.map_err(|e| {
+        characteristic.subscribe_indicate(true).await.map_err(|e| {
             anyhow!("indication subscribe failed: {e:?}")
         })?;
         println!("[scale] subscribed to indications on {channel_label}");
     } else {
-        characteristic.subscribe_notify(false).await.map_err(|e| {
+        characteristic.subscribe_notify(true).await.map_err(|e| {
             anyhow!("notify subscribe failed: {e:?}")
         })?;
         println!("[scale] subscribed to notifications on {channel_label}");
