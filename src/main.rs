@@ -6,8 +6,8 @@ fn main() {
     println!("OpenBarista firmware binary is only supported on xtensa targets.");
 }
 
-mod sensors;
 mod scale_ble;
+mod sensors;
 mod web_assets;
 mod wifi_provision;
 
@@ -54,8 +54,12 @@ fn main() -> Result<()> {
         }
     };
 
-    let wifi_runtime =
-        wifi_provision::setup_wifi(wifi_modem, nvs_partition, telemetry.clone(), scale_runtime.clone())?;
+    let wifi_runtime = wifi_provision::setup_wifi(
+        wifi_modem,
+        nvs_partition,
+        telemetry.clone(),
+        scale_runtime.clone(),
+    )?;
     println!(
         "[main] Connectivity ready at http://{}",
         wifi_runtime.ip_addr()
@@ -106,10 +110,10 @@ fn main() -> Result<()> {
 
         telemetry.update(temperature.temperature_c, pressure.bar, pressure.psi);
 
-        println!(
-            "Temp: {:.2} C | Pressure: {:.2} bar | Pressure (PSI): {:.2}",
-            temperature.temperature_c, pressure.bar, pressure.psi,
-        );
+        // println!(
+        //     "Temp: {:.2} C | Pressure: {:.2} bar | Pressure (PSI): {:.2}",
+        //     temperature.temperature_c, pressure.bar, pressure.psi,
+        // );
 
         FreeRtos::delay_ms(50);
     }

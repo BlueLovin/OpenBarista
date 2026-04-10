@@ -25,6 +25,7 @@ use openbarista::telemetry_math::{sanitize_weight_g, FlowEstimator};
 const SCALE_SCAN_DURATION_S: u32 = 6;
 const CONNECT_TIMEOUT_MS: u32 = 2_000;
 const CONNECT_MAX_ATTEMPTS: u32 = 10;
+const RECONNECT_POLL_INTERVAL_MS: u64 = 5_000;
 const MAX_DISCOVERED_SCALES: usize = 18;
 const SCALE_READY_MESSAGE: &str = "Bluetooth scale ready. Tap Find Scales to pair.";
 const SCALE_STARTUP_MESSAGE: &str = "Starting Bluetooth scale transport...";
@@ -157,6 +158,7 @@ struct ScaleManagerState {
     discovered: Vec<DiscoveredScaleInternal>,
     active: Option<ActiveScaleConnection>,
     saved_scale: Option<SavedScale>,
+    auto_reconnect_suppressed: bool,
     weight_g: f32,
     flow_gps: f32,
     battery_percent: Option<u8>,
@@ -173,6 +175,7 @@ impl ScaleManagerState {
             discovered: Vec::new(),
             active: None,
             saved_scale: None,
+            auto_reconnect_suppressed: false,
             weight_g: 0.0,
             flow_gps: 0.0,
             battery_percent: None,
@@ -294,6 +297,76 @@ impl ScaleRuntime {
                 worker_loop(worker_rx, worker_state, worker_telemetry);
             })?;
 
+        // Background reconnect thread: periodically tries to connect to the
+        // saved scale when idle/disconnected/errored.  This means the user
+        // can just power on the scale and it'll connect automatically.
+        let reconn_state = state.clone();
+        let reconn_tx = worker_tx.clone();
+        let _reconnect_thread = thread::Builder::new()
+            .name("ble-reconn".into())
+            .stack_size(4096)
+            .spawn(move || {
+                // Wait for the BLE worker to finish initialising.
+                thread::sleep(Duration::from_secs(2));
+                loop {
+                    thread::sleep(Duration::from_millis(RECONNECT_POLL_INTERVAL_MS));
+                    let request = {
+                        let s = lock_or_recover(&reconn_state);
+                        // Only reconnect when idle or in an error state —
+                        // never while scanning, connecting, or already
+                        // streaming.
+                        let dominated = matches!(
+                            s.state,
+                            ScaleConnectionState::Idle | ScaleConnectionState::Error
+                        );
+                        if !dominated {
+                            continue;
+                        }
+                        // Suppressed by manual disconnect — don't auto-reconnect
+                        // until user explicitly scans or connects again.
+                        if s.auto_reconnect_suppressed {
+                            continue;
+                        }
+                        // Must have a saved scale to reconnect to.
+                        let Some(saved) = s.saved_scale.as_ref() else {
+                            continue;
+                        };
+                        // Don't reconnect if a scale is already active.
+                        if s.active.is_some() {
+                            continue;
+                        }
+                        ConnectRequest {
+                            address_text: saved.address.clone(),
+                            addr_type_str: saved.addr_type.clone(),
+                            name: saved.name.clone(),
+                        }
+                    };
+                    println!(
+                        "[scale] auto-reconnect: trying {}",
+                        display_scale_name(&request.name)
+                    );
+                    // Update UI state so the user sees "Connecting..."
+                    {
+                        let mut s = lock_or_recover(&reconn_state);
+                        s.state = ScaleConnectionState::Connecting;
+                        s.message = format!(
+                            "Auto-connecting to {}...",
+                            display_scale_name(&request.name)
+                        );
+                        s.active = Some(ActiveScaleConnection {
+                            address_text: request.address_text.clone(),
+                            name: request.name.clone(),
+                            protocol: ScaleProtocol::Unknown,
+                        });
+                        s.reset_live_values();
+                    }
+                    if reconn_tx.send(WorkerCommand::ConnectTarget(request)).is_err() {
+                        println!("[scale] auto-reconnect: worker channel closed, stopping");
+                        break;
+                    }
+                }
+            })?;
+
         Ok(Self {
             state,
             worker_tx: Some(worker_tx),
@@ -337,6 +410,7 @@ impl ScaleRuntime {
             }
             state.discovered.clear();
             state.state = ScaleConnectionState::Scanning;
+            state.auto_reconnect_suppressed = false;
             state.message = "Scanning for nearby Bluetooth scales...".to_owned();
         }
         self.telemetry.clear_scale();
@@ -348,6 +422,12 @@ impl ScaleRuntime {
     pub fn connect_address(&self, address: &str) -> Result<String> {
         if self.worker_tx.is_none() {
             return Err(anyhow!("Bluetooth is unavailable on this build."));
+        }
+
+        // User-initiated connect clears any reconnect suppression.
+        {
+            let mut state = lock_or_recover(&self.state);
+            state.auto_reconnect_suppressed = false;
         }
 
         let request = {
@@ -447,6 +527,7 @@ impl ScaleRuntime {
             state.active = None;
             state.state = ScaleConnectionState::Idle;
             state.message = "Disconnected.".to_owned();
+            state.auto_reconnect_suppressed = true;
             state.reset_live_values();
 
             // If a BLE connect is in progress, cancel it at the controller
