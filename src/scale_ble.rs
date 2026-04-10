@@ -636,8 +636,12 @@ fn worker_loop(
                         req.addr_type_str,
                     );
 
-                    // --- Retry loop for flaky BLE connections ---
-                    let mut connected_client: Option<esp32_nimble::BLEClient> = None;
+                    // Create a single client and reuse it across retry
+                    // attempts.  Creating multiple BLEClients can leave
+                    // stale entries in NimBLE's notification dispatch table,
+                    // causing notifications to silently go nowhere.
+                    let mut client = ble_device.new_client();
+                    let mut connected = false;
 
                     for attempt in 1..=CONNECT_MAX_ATTEMPTS {
                         // Check if user cancelled between retries
@@ -663,52 +667,11 @@ fn worker_loop(
                             }
                         }
 
-                        let mut client = ble_device.new_client();
-
-                        // Abort signal — signaled by the watchdog or disconnect
-                        // callback so that select() can break out of a hung
-                        // client.connect().await.
-                        let abort_signal = Arc::new(Signal::<EspRawMutex, ()>::new());
-
-                        // Disconnect callback (runs on NimBLE host task)
-                        let disc_state = state.clone();
-                        let disc_telemetry = telemetry.clone();
-                        let disc_name = req.name.clone();
-                        let disc_addr = req.address_text.clone();
-                        let disc_abort = abort_signal.clone();
-                        client.on_disconnect(move |reason| {
-                            println!(
-                                "[scale] disconnected from {} (reason={reason})",
-                                display_scale_name(&disc_name)
-                            );
-                            disc_abort.signal(()); // unblock select
-                            let mut s = lock_or_recover(&disc_state);
-                            let is_current = s
-                                .active
-                                .as_ref()
-                                .map(|a| a.address_text.eq_ignore_ascii_case(&disc_addr))
-                                .unwrap_or(false);
-                            if !is_current {
-                                println!(
-                                    "[scale] ignoring stale disconnect callback for {}",
-                                    disc_addr
-                                );
-                                return;
-                            }
-                            s.active = None;
-                            s.state = ScaleConnectionState::Idle;
-                            s.message = format!(
-                                "Disconnected from {}.",
-                                display_scale_name(&disc_name)
-                            );
-                            s.reset_live_values();
-                            disc_telemetry.clear_scale();
-                        });
-
-                        // Watchdog: abort after 12 seconds if connect() hasn't
+                        // Watchdog: abort after timeout if connect() hasn't
                         // returned.  Handles both the GAP-connect phase (30s
                         // default timeout is too long) and the library's MTU-
                         // exchange hang (no timeout at all).
+                        let abort_signal = Arc::new(Signal::<EspRawMutex, ()>::new());
                         let wd_abort = abort_signal.clone();
                         let wd_addr_text = req.address_text.clone();
                         let wd_addr_type_str = addr_type_str.clone();
@@ -728,14 +691,7 @@ fn worker_loop(
                                 }
                                 println!("[scale] WATCHDOG: connect timed out after {}ms", CONNECT_TIMEOUT_MS);
                                 unsafe {
-                                    // Cancel pending connect attempt — makes
-                                    // BLEClient::connect() return Err for the
-                                    // GAP-connect phase.
                                     esp_idf_svc::sys::ble_gap_conn_cancel();
-                                    // Also terminate any established connection
-                                    // (handles the MTU-exchange hang where
-                                    // connect succeeded but signal was never
-                                    // fired).
                                     if let Some(a) = BLEAddress::from_str(&wd_addr_text, parse_nimble_addr_type(&wd_addr_type_str)) {
                                         let ble_addr: esp_idf_svc::sys::ble_addr_t = a.into();
                                         let mut desc: esp_idf_svc::sys::ble_gap_conn_desc =
@@ -774,12 +730,11 @@ fn worker_loop(
 
                         match connect_result {
                             Some(Ok(())) => {
-                                connected_client = Some(client);
+                                connected = true;
                                 break;
                             }
                             Some(Err(e)) => {
                                 cancel_gap_operations();
-                                let _ = client.disconnect();
                                 let s = lock_or_recover(&state);
                                 if s.active.is_none() {
                                     println!("[scale] connect cancelled (err={:?})", e);
@@ -805,7 +760,6 @@ fn worker_loop(
                             }
                             None => {
                                 cancel_gap_operations();
-                                let _ = client.disconnect();
                                 let s = lock_or_recover(&state);
                                 if s.active.is_none() {
                                     println!("[scale] connect cancelled during watchdog abort");
@@ -831,8 +785,8 @@ fn worker_loop(
                         }
                     } // end retry loop
 
-                    // --- Post-connect: service discovery (only if we got a client) ---
-                    if let Some(mut client) = connected_client {
+                    // --- Post-connect: service discovery (only if connected) ---
+                    if connected {
                         // Check if the connect was cancelled while we waited
                         {
                             let s = lock_or_recover(&state);
@@ -842,6 +796,28 @@ fn worker_loop(
                                 continue;
                             }
                         }
+
+                        // Register disconnect callback now that we have a
+                        // live connection — not during retries where stale
+                        // callbacks cause problems.
+                        let disc_state = state.clone();
+                        let disc_telemetry = telemetry.clone();
+                        let disc_name = req.name.clone();
+                        client.on_disconnect(move |reason| {
+                            println!(
+                                "[scale] disconnected from {} (reason={reason})",
+                                display_scale_name(&disc_name)
+                            );
+                            let mut s = lock_or_recover(&disc_state);
+                            s.active = None;
+                            s.state = ScaleConnectionState::Idle;
+                            s.message = format!(
+                                "Disconnected from {}.",
+                                display_scale_name(&disc_name)
+                            );
+                            s.reset_live_values();
+                            disc_telemetry.clear_scale();
+                        });
 
                         println!("[scale] connected to {}", req.address_text);
 
@@ -1182,12 +1158,12 @@ async fn subscribe_weight_notifications(
     });
 
     if characteristic.can_indicate() && !characteristic.can_notify() {
-        characteristic.subscribe_indicate(true).await.map_err(|e| {
+        characteristic.subscribe_indicate(false).await.map_err(|e| {
             anyhow!("indication subscribe failed: {e:?}")
         })?;
         println!("[scale] subscribed to indications on {channel_label}");
     } else {
-        characteristic.subscribe_notify(true).await.map_err(|e| {
+        characteristic.subscribe_notify(false).await.map_err(|e| {
             anyhow!("notify subscribe failed: {e:?}")
         })?;
         println!("[scale] subscribed to notifications on {channel_label}");
