@@ -287,8 +287,16 @@ function renderScaleCurrent(data) {
   titleWrap.append(title, meta);
 
   const badge = document.createElement("span");
-  badge.className = connected ? "scale-badge scale-badge-live" : "scale-badge";
-  badge.textContent = connected ? "Connected" : "Saved";
+  if (connected) {
+    badge.className = "scale-badge scale-badge-live";
+    badge.textContent = "Connected";
+  } else if (connectBusy) {
+    badge.className = "scale-badge scale-badge-busy";
+    badge.textContent = "Connecting...";
+  } else {
+    badge.className = "scale-badge";
+    badge.textContent = "Saved";
+  }
 
   head.append(titleWrap, badge);
   scaleCurrentCardEl.appendChild(head);
@@ -368,9 +376,12 @@ function renderScaleDevices(data) {
       pill.textContent = "Saved";
       side.appendChild(pill);
     }
+    const isThisDevice = connectBusy
+      && data.connected_address
+      && data.connected_address.toLowerCase() === device.address.toLowerCase();
     side.appendChild(
       buildScaleActionButton(
-        connectBusy ? "Connecting..." : "Connect",
+        isThisDevice ? "Connecting..." : "Connect",
         "connect",
         device.address,
         connectBusy,

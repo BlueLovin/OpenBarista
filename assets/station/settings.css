@@ -249,6 +249,11 @@ h2 {
   color: #dfffab;
 }
 
+.scale-badge-busy {
+  background: rgba(255, 200, 60, 0.16);
+  color: #ffe0a0;
+}
+
 .scale-list {
   display: grid;
   gap: 10px;
