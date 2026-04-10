@@ -9,7 +9,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Result};
 use embassy_futures::select::{select, Either};
-use embassy_futures::yield_now;
 use embassy_sync::signal::Signal;
 use esp_idf_hal::task::block_on;
 use esp_idf_hal::task::embassy_sync::EspRawMutex;
@@ -737,8 +736,10 @@ fn worker_loop(
                         if attempt > 1 {
                             println!("[scale] retrying connect (attempt {attempt}/{CONNECT_MAX_ATTEMPTS})");
                             cancel_gap_operations();
-                            // Brief pause before retry to let the controller settle
-                            yield_now().await;
+                            // Real delay to let the NimBLE controller fully
+                            // process the previous cancellation.  yield_now()
+                            // is a no-op under block_on's single-task executor.
+                            thread::sleep(Duration::from_millis(500));
                             {
                                 let mut s = lock_or_recover(&state);
                                 s.message = format!(
@@ -758,7 +759,7 @@ fn worker_loop(
                         let wd_addr_type_str = addr_type_str.clone();
                         let wd_done = Arc::new(AtomicBool::new(false));
                         let wd_done2 = wd_done.clone();
-                        let _ = thread::Builder::new()
+                        let wd_handle = thread::Builder::new()
                             .name("ble-wd".into())
                             .stack_size(4096)
                             .spawn(move || {
@@ -806,8 +807,12 @@ fn worker_loop(
                                 None
                             }
                         };
-                        // Cancel the watchdog thread.
+                        // Cancel the watchdog thread and wait for it to exit
+                        // so we don't leak stack on fast retries.
                         wd_done.store(true, Ordering::Relaxed);
+                        if let Ok(handle) = wd_handle {
+                            let _ = handle.join();
+                        }
 
                         match connect_result {
                             Some(Ok(())) => {
