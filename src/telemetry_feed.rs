@@ -1,4 +1,6 @@
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
+
+use crate::sync_utils::lock_or_panic;
 
 #[derive(Debug, Clone, Copy)]
 pub struct TelemetrySnapshot {
@@ -6,6 +8,9 @@ pub struct TelemetrySnapshot {
     pub temperature_c: f32,
     pub pressure_bar: f32,
     pub pressure_psi: f32,
+    pub scale_connected: bool,
+    pub weight_g: f32,
+    pub flow_gps: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -21,20 +26,43 @@ impl SharedTelemetry {
                 temperature_c: 0.0,
                 pressure_bar: 0.0,
                 pressure_psi: 0.0,
+                scale_connected: false,
+                weight_g: 0.0,
+                flow_gps: 0.0,
             })),
         }
     }
 
     pub fn update(&self, temperature_c: f32, pressure_bar: f32, pressure_psi: f32) {
-        let mut state = lock_or_recover(&self.inner);
+        self.update_brew(temperature_c, pressure_bar, pressure_psi);
+    }
+
+    pub fn update_brew(&self, temperature_c: f32, pressure_bar: f32, pressure_psi: f32) {
+        let mut state = lock_or_panic(&self.inner);
         state.seq = state.seq.wrapping_add(1);
         state.temperature_c = temperature_c;
         state.pressure_bar = pressure_bar;
         state.pressure_psi = pressure_psi;
     }
 
+    pub fn update_scale(&self, connected: bool, weight_g: f32, flow_gps: f32) {
+        let mut state = lock_or_panic(&self.inner);
+        state.seq = state.seq.wrapping_add(1);
+        state.scale_connected = connected;
+        state.weight_g = weight_g;
+        state.flow_gps = flow_gps;
+    }
+
+    pub fn clear_scale(&self) {
+        let mut state = lock_or_panic(&self.inner);
+        state.seq = state.seq.wrapping_add(1);
+        state.scale_connected = false;
+        state.weight_g = 0.0;
+        state.flow_gps = 0.0;
+    }
+
     pub fn snapshot(&self) -> TelemetrySnapshot {
-        *lock_or_recover(&self.inner)
+        *lock_or_panic(&self.inner)
     }
 }
 
@@ -42,12 +70,6 @@ impl Default for SharedTelemetry {
     fn default() -> Self {
         Self::new()
     }
-}
-
-fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().expect(
-        "telemetry mutex poisoned: refusing to continue with potentially inconsistent state",
-    )
 }
 
 #[cfg(test)]
@@ -75,6 +97,9 @@ mod tests {
         approx_eq(snapshot.temperature_c, 94.4, 1e-6);
         approx_eq(snapshot.pressure_bar, 8.2, 1e-6);
         approx_eq(snapshot.pressure_psi, 118.9, 1e-6);
+        assert!(!snapshot.scale_connected);
+        approx_eq(snapshot.weight_g, 0.0, 1e-6);
+        approx_eq(snapshot.flow_gps, 0.0, 1e-6);
     }
 
     #[test]
@@ -86,6 +111,36 @@ mod tests {
         approx_eq(via_new.temperature_c, via_default.temperature_c, 1e-6);
         approx_eq(via_new.pressure_bar, via_default.pressure_bar, 1e-6);
         approx_eq(via_new.pressure_psi, via_default.pressure_psi, 1e-6);
+        assert_eq!(via_new.scale_connected, via_default.scale_connected);
+        approx_eq(via_new.weight_g, via_default.weight_g, 1e-6);
+        approx_eq(via_new.flow_gps, via_default.flow_gps, 1e-6);
+    }
+
+    #[test]
+    fn scale_updates_are_tracked_separately() {
+        let telemetry = SharedTelemetry::new();
+
+        telemetry.update_scale(true, 33.5, 2.8);
+
+        let snapshot = telemetry.snapshot();
+        assert_eq!(snapshot.seq, 1);
+        assert!(snapshot.scale_connected);
+        approx_eq(snapshot.weight_g, 33.5, 1e-6);
+        approx_eq(snapshot.flow_gps, 2.8, 1e-6);
+    }
+
+    #[test]
+    fn clear_scale_resets_scale_fields() {
+        let telemetry = SharedTelemetry::new();
+
+        telemetry.update_scale(true, 18.4, 1.4);
+        telemetry.clear_scale();
+
+        let snapshot = telemetry.snapshot();
+        assert_eq!(snapshot.seq, 2);
+        assert!(!snapshot.scale_connected);
+        approx_eq(snapshot.weight_g, 0.0, 1e-6);
+        approx_eq(snapshot.flow_gps, 0.0, 1e-6);
     }
 
     #[test]
@@ -95,6 +150,9 @@ mod tests {
             temperature_c: 95.0,
             pressure_bar: 9.0,
             pressure_psi: 130.5,
+            scale_connected: true,
+            weight_g: 42.0,
+            flow_gps: 3.1,
         }));
 
         let state_for_panic = Arc::clone(&state);

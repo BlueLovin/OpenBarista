@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use std::{
@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::{anyhow, Result};
 use embedded_svc::ipv4::{self, Ipv4Addr, Mask, Subnet};
-use esp_idf_hal::modem::Modem;
+use esp_idf_hal::modem::WifiModemPeripheral;
 #[cfg(any(esp_idf_comp_mdns_enabled, esp_idf_comp_espressif__mdns_enabled))]
 use esp_idf_svc::mdns::EspMdns;
 use esp_idf_svc::{
@@ -26,7 +26,8 @@ use esp_idf_svc::{
     },
 };
 
-use crate::web_assets;
+use crate::{scale_ble::{SavedScale, ScaleRuntime}, web_assets};
+use openbarista::sync_utils::lock_or_panic;
 use openbarista::telemetry_feed::SharedTelemetry;
 
 const NVS_NAMESPACE: &str = "wifi";
@@ -35,11 +36,18 @@ const NVS_PASS_KEY: &str = "pass";
 const SETTINGS_NAMESPACE: &str = "settings";
 const SETTINGS_LABEL_KEY: &str = "label";
 const SETTINGS_TEMP_OFFSET_KEY: &str = "temp_offset_c";
+const SCALE_NAMESPACE: &str = "scale";
+const SCALE_ADDR_KEY: &str = "addr";
+const SCALE_NAME_KEY: &str = "name";
+const SCALE_ADDR_TYPE_KEY: &str = "addr_type";
 
 const AP_SSID: &str = "OpenBarista";
 const MAX_SSID_LEN: usize = 32;
 const MAX_PASS_LEN: usize = 64;
 const MAX_LABEL_LEN: usize = 32;
+const MAX_SCALE_NAME_LEN: usize = 48;
+const MAX_SCALE_ADDR_LEN: usize = 17;
+const MAX_SCALE_ADDR_TYPE_LEN: usize = 16;
 const MAX_TEMP_OFFSET_ABS_C: f32 = 20.0;
 const AP_GATEWAY: Ipv4Addr = Ipv4Addr::new(192, 168, 4, 1);
 #[cfg(any(esp_idf_comp_mdns_enabled, esp_idf_comp_espressif__mdns_enabled))]
@@ -88,12 +96,6 @@ fn station_response_headers<'a>(
         ),
         ("Permissions-Policy", "geolocation=(), microphone=(), camera=()"),
     ]
-}
-
-fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .expect("mutex poisoned: refusing to continue with potentially inconsistent state")
 }
 
 enum RequestBodyError {
@@ -230,6 +232,65 @@ fn save_temperature_offset(nvs_partition: &EspDefaultNvsPartition, temperature_o
     Ok(())
 }
 
+fn read_saved_scale(nvs_partition: &EspDefaultNvsPartition) -> Result<Option<SavedScale>> {
+    let nvs_scale = EspNvs::new(nvs_partition.clone(), SCALE_NAMESPACE, true)?;
+
+    let mut address_buf = [0u8; MAX_SCALE_ADDR_LEN + 1];
+    let mut name_buf = [0u8; MAX_SCALE_NAME_LEN + 1];
+    let mut addr_type_buf = [0u8; MAX_SCALE_ADDR_TYPE_LEN + 1];
+
+    let address = nvs_scale
+        .get_str(SCALE_ADDR_KEY, &mut address_buf)?
+        .unwrap_or("")
+        .trim()
+        .to_owned();
+
+    if address.is_empty() {
+        return Ok(None);
+    }
+
+    let name = nvs_scale
+        .get_str(SCALE_NAME_KEY, &mut name_buf)?
+        .unwrap_or("Saved scale")
+        .trim()
+        .to_owned();
+    let addr_type = nvs_scale
+        .get_str(SCALE_ADDR_TYPE_KEY, &mut addr_type_buf)?
+        .unwrap_or("public")
+        .trim()
+        .to_owned();
+
+    Ok(Some(SavedScale {
+        address,
+        name,
+        addr_type,
+    }))
+}
+
+fn save_saved_scale(nvs_partition: &EspDefaultNvsPartition, saved_scale: &SavedScale) -> Result<()> {
+    if saved_scale.address.is_empty()
+        || saved_scale.address.len() > MAX_SCALE_ADDR_LEN
+        || saved_scale.name.len() > MAX_SCALE_NAME_LEN
+        || saved_scale.addr_type.len() > MAX_SCALE_ADDR_TYPE_LEN
+    {
+        return Err(anyhow!("Scale settings are invalid or out of range."));
+    }
+
+    let nvs_scale = EspNvs::new(nvs_partition.clone(), SCALE_NAMESPACE, true)?;
+    nvs_scale.set_str(SCALE_ADDR_KEY, &saved_scale.address)?;
+    nvs_scale.set_str(SCALE_NAME_KEY, &saved_scale.name)?;
+    nvs_scale.set_str(SCALE_ADDR_TYPE_KEY, &saved_scale.addr_type)?;
+    Ok(())
+}
+
+fn clear_saved_scale(nvs_partition: &EspDefaultNvsPartition) -> Result<()> {
+    let nvs_scale = EspNvs::new(nvs_partition.clone(), SCALE_NAMESPACE, true)?;
+    let _ = nvs_scale.remove(SCALE_ADDR_KEY);
+    let _ = nvs_scale.remove(SCALE_NAME_KEY);
+    let _ = nvs_scale.remove(SCALE_ADDR_TYPE_KEY);
+    Ok(())
+}
+
 /// Holds the active WiFi driver and optional mDNS handle.
 /// Both must remain alive for the duration of the program.
 pub struct WifiStack {
@@ -269,7 +330,7 @@ impl WifiRuntime {
     }
 
     pub fn temperature_offset_c(&self) -> f32 {
-        *lock_or_recover(&self.temperature_offset_c)
+        *lock_or_panic(&self.temperature_offset_c)
     }
 }
 
@@ -282,17 +343,21 @@ impl WifiRuntime {
 ///   page at 192.168.4.1.  Once the user submits credentials the device saves
 ///   them to NVS and calls `esp_restart()`; this function never returns in that
 ///   path.
-pub fn setup_wifi(
-    modem: Modem<'static>,
+pub fn setup_wifi<M>(
+    modem: M,
+    nvs_partition: EspDefaultNvsPartition,
     telemetry: SharedTelemetry,
-) -> Result<WifiRuntime, anyhow::Error> {
+    scale_runtime: Arc<ScaleRuntime>,
+) -> Result<WifiRuntime, anyhow::Error>
+where
+    M: WifiModemPeripheral + 'static,
+{
     // --- WiFi provisioning & mDNS -------------------------------------------
     // On first boot this will start a SoftAP named "OpenBarista" and serve a
     // captive portal at 192.168.4.1 so the user can enter their home WiFi
     // credentials.  On subsequent boots the device connects to the saved
     // network and advertises itself as http://openbarista.local via mDNS.
     let sysloop = EspSystemEventLoop::take()?;
-    let nvs_partition = EspDefaultNvsPartition::take()?;
     let nvs_for_station_server = nvs_partition.clone();
     let initial_settings = read_device_settings(&nvs_for_station_server)?;
     let temperature_offset_c = Arc::new(Mutex::new(initial_settings.temperature_offset_c));
@@ -350,7 +415,7 @@ pub fn setup_wifi(
 
         let connect_progress = Arc::new(Mutex::new(ConnectProgress::new(ssid.clone(), 5)));
         {
-            let mut progress = lock_or_recover(&connect_progress);
+            let mut progress = lock_or_panic(&connect_progress);
             progress.stage = "connecting".to_owned();
             progress.message = format!("Trying '{}'...", ssid);
         }
@@ -365,7 +430,7 @@ pub fn setup_wifi(
         let mut connected = false;
         for attempt in 1..=5 {
             {
-                let mut progress = lock_or_recover(&connect_progress);
+                let mut progress = lock_or_panic(&connect_progress);
                 progress.stage = "connecting".to_owned();
                 progress.attempt = attempt;
                 progress.message = format!("Connecting to '{}' (attempt {attempt}/5)...", ssid);
@@ -380,7 +445,7 @@ pub fn setup_wifi(
 
         if connected {
             {
-                let mut progress = lock_or_recover(&connect_progress);
+                let mut progress = lock_or_panic(&connect_progress);
                 progress.stage = "connected".to_owned();
                 progress.message = format!("Connected to '{}'. Bringing dashboard online...", ssid);
             }
@@ -413,6 +478,7 @@ pub fn setup_wifi(
                     nvs_for_station_server,
                     wifi,
                     temperature_offset_c.clone(),
+                    scale_runtime.clone(),
                 )?;
 
             let runtime = WifiRuntime {
@@ -426,7 +492,7 @@ pub fn setup_wifi(
 
         println!("[wifi] Could not connect after retries. Starting provisioning portal...");
         {
-            let mut progress = lock_or_recover(&connect_progress);
+            let mut progress = lock_or_panic(&connect_progress);
             progress.stage = "failed".to_owned();
             progress.message = "Could not connect after retries. Staying in setup mode.".to_owned();
         }
@@ -496,7 +562,7 @@ fn start_connecting_status_portal(
     }
 
     server.fn_handler("/status", Method::Get, move |req| {
-        let payload = connect_progress_json(&lock_or_recover(&progress_for_status));
+        let payload = connect_progress_json(&lock_or_panic(&progress_for_status));
         let headers = response_headers("application/json; charset=utf-8", "no-store");
         req.into_response(200, Some("OK"), &headers)?
             .write_all(payload.as_bytes())?;
@@ -566,7 +632,7 @@ fn start_connecting_status_portal(
         nvs.set_str(NVS_SSID_KEY, &ssid)?;
         nvs.set_str(NVS_PASS_KEY, &pass)?;
         {
-            let mut state = lock_or_recover(&progress_for_connect);
+            let mut state = lock_or_panic(&progress_for_connect);
             state.stage = "rebooting".to_owned();
             state.ssid = ssid.clone();
             state.message = format!("Saved credentials for '{}'. Rebooting...", ssid);
@@ -713,8 +779,8 @@ fn run_captive_portal(
     }
 
     server.fn_handler("/networks", Method::Get, move |req| {
-        *lock_or_recover(&scan_requested_for_handler) = true;
-        let networks = lock_or_recover(&networks_for_handler).clone();
+        *lock_or_panic(&scan_requested_for_handler) = true;
+        let networks = lock_or_panic(&networks_for_handler).clone();
         let payload = networks_json(&networks);
         let headers = response_headers("application/json; charset=utf-8", "no-store");
         req.into_response(200, Some("OK"), &headers)?
@@ -724,7 +790,7 @@ fn run_captive_portal(
 
     let status_for_get = status.clone();
     server.fn_handler("/status", Method::Get, move |req| {
-        let state = lock_or_recover(&status_for_get);
+        let state = lock_or_panic(&status_for_get);
         let (stage, message) = match &*state {
             ProvisionStatus::Idle => (
                 "provisioning",
@@ -792,7 +858,7 @@ fn run_captive_portal(
             let headers = response_headers("text/html; charset=utf-8", "no-store");
             req.into_response(200, Some("OK"), &headers)?
                 .write_all(success_html.as_bytes())?;
-            *lock_or_recover(&status_for_handler) = ProvisionStatus::Rebooting;
+            *lock_or_panic(&status_for_handler) = ProvisionStatus::Rebooting;
         }
 
         Ok::<_, anyhow::Error>(())
@@ -802,7 +868,7 @@ fn run_captive_portal(
     loop {
         thread::sleep(Duration::from_millis(100));
 
-        if matches!(*lock_or_recover(&status), ProvisionStatus::Rebooting) {
+        if matches!(*lock_or_panic(&status), ProvisionStatus::Rebooting) {
             // Give the HTTP response enough time to flush before restarting.
             thread::sleep(Duration::from_millis(1500));
             drop(server);
@@ -811,7 +877,7 @@ fn run_captive_portal(
         }
 
         let should_scan = {
-            let mut requested = lock_or_recover(&scan_requested);
+            let mut requested = lock_or_panic(&scan_requested);
             let value = *requested;
             *requested = false;
             value
@@ -829,7 +895,12 @@ pub fn start_station_http_server(
     nvs_partition: EspDefaultNvsPartition,
     _wifi: Arc<Mutex<BlockingWifi<EspWifi<'static>>>>,
     temperature_offset_c: Arc<Mutex<f32>>,
+    scale_runtime: Arc<ScaleRuntime>,
 ) -> Result<EspHttpServer<'static>> {
+    let saved_scale = read_saved_scale(&nvs_partition)?;
+    scale_runtime.apply_saved_scale(saved_scale);
+    let _ = scale_runtime.connect_saved_scale();
+
     let build_id_value = build_id().to_owned();
     let board_id_value = board_id();
     let html = web_assets::station_index_html(ip_addr, &build_id_value, &board_id_value);
@@ -895,9 +966,95 @@ pub fn start_station_http_server(
             snapshot.temperature_c,
             snapshot.pressure_bar,
             snapshot.pressure_psi,
+            snapshot.scale_connected,
+            snapshot.weight_g,
+            snapshot.flow_gps,
         );
         let headers = response_headers("application/json; charset=utf-8", "no-store");
         req.into_response(200, Some("OK"), &headers)?
+            .write_all(payload.as_bytes())?;
+        Ok::<_, anyhow::Error>(())
+    })?;
+
+    let scale_for_get = scale_runtime.clone();
+    server.fn_handler("/api/scale", Method::Get, move |req| {
+        let payload = scale_status_json(&scale_for_get.snapshot());
+        let headers = response_headers("application/json; charset=utf-8", "no-store");
+        req.into_response(200, Some("OK"), &headers)?
+            .write_all(payload.as_bytes())?;
+        Ok::<_, anyhow::Error>(())
+    })?;
+
+    let nvs_for_scale_post = nvs_partition.clone();
+    let scale_for_post = scale_runtime.clone();
+    server.fn_handler("/api/scale", Method::Post, move |mut req| {
+        let max_body_len = 256usize;
+        let body_str = match read_request_body_utf8(&mut req, max_body_len) {
+            Ok(body) => body,
+            Err(RequestBodyError::TooLarge) => {
+                let payload = action_result_json(false, "Request body too large.");
+                let headers = response_headers("application/json; charset=utf-8", "no-store");
+                req.into_response(413, Some("Payload Too Large"), &headers)?
+                    .write_all(payload.as_bytes())?;
+                return Ok::<_, anyhow::Error>(());
+            }
+            Err(RequestBodyError::InvalidUtf8) => {
+                let payload = action_result_json(false, "Request body must be valid UTF-8.");
+                let headers = response_headers("application/json; charset=utf-8", "no-store");
+                req.into_response(400, Some("Bad Request"), &headers)?
+                    .write_all(payload.as_bytes())?;
+                return Ok::<_, anyhow::Error>(());
+            }
+            Err(RequestBodyError::Io(err)) => return Err(err),
+        };
+
+        let action = parse_form_field(&body_str, "action")
+            .unwrap_or_default()
+            .trim()
+            .to_owned();
+        let address = parse_form_field(&body_str, "address")
+            .unwrap_or_default()
+            .trim()
+            .to_owned();
+
+        let result = match action.as_str() {
+            "scan" => scale_for_post.start_scan().map(str::to_owned),
+            "connect" => {
+                let snapshot = scale_for_post.snapshot();
+                let saved_scale = snapshot
+                    .devices
+                    .iter()
+                    .find(|device| device.address.eq_ignore_ascii_case(&address))
+                    .map(|device| SavedScale {
+                        address: device.address.clone(),
+                        name: device.name.clone(),
+                        addr_type: device.address_type.clone(),
+                    })
+                    .or(snapshot.saved_scale);
+
+                let saved_scale = saved_scale
+                    .ok_or_else(|| anyhow!("Scan first, then tap a device from the list."))?;
+                save_saved_scale(&nvs_for_scale_post, &saved_scale)?;
+                scale_for_post.apply_saved_scale(Some(saved_scale.clone()));
+                scale_for_post.connect_address(&saved_scale.address)
+            }
+            "disconnect" => scale_for_post.disconnect().map(str::to_owned),
+            "forget" => {
+                clear_saved_scale(&nvs_for_scale_post)?;
+                scale_for_post.forget_saved_scale();
+                let _ = scale_for_post.disconnect();
+                Ok("Saved scale forgotten.".to_owned())
+            }
+            _ => Err(anyhow!("Unsupported scale action.")),
+        };
+
+        let (status_code, payload) = match result {
+            Ok(message) => (200, action_result_json(true, &message)),
+            Err(err) => (400, action_result_json(false, &err.to_string())),
+        };
+
+        let headers = response_headers("application/json; charset=utf-8", "no-store");
+        req.into_response(status_code, Some("OK"), &headers)?
             .write_all(payload.as_bytes())?;
         Ok::<_, anyhow::Error>(())
     })?;
@@ -1066,7 +1223,7 @@ pub fn start_station_http_server(
         let mut rebooting = false;
         save_device_label(&nvs_for_post, &device_label)?;
         save_temperature_offset(&nvs_for_post, parsed_temperature_offset_c)?;
-        *lock_or_recover(&temperature_offset_for_post) = parsed_temperature_offset_c;
+        *lock_or_panic(&temperature_offset_for_post) = parsed_temperature_offset_c;
 
         if wifi_change_requested {
             let nvs_wifi = EspNvs::new(nvs_for_post.clone(), NVS_NAMESPACE, true)?;
@@ -1143,7 +1300,7 @@ fn refresh_network_cache(
                 .collect();
             names.sort();
             names.dedup();
-            *lock_or_recover(cache) = names;
+            *lock_or_panic(cache) = names;
         }
         Err(err) => {
             println!("[wifi] Scan failed: {err:?}");
@@ -1188,14 +1345,89 @@ fn settings_json(
     )
 }
 
-fn telemetry_json(seq: u64, temperature_c: f32, pressure_bar: f32, pressure_psi: f32) -> String {
+fn telemetry_json(
+    seq: u64,
+    temperature_c: f32,
+    pressure_bar: f32,
+    pressure_psi: f32,
+    scale_connected: bool,
+    weight_g: f32,
+    flow_gps: f32,
+) -> String {
     let temperature_c = sanitize_telemetry_value(temperature_c);
     let pressure_bar = sanitize_telemetry_value(pressure_bar);
     let pressure_psi = sanitize_telemetry_value(pressure_psi);
+    let weight_g = sanitize_telemetry_value(weight_g);
+    let flow_gps = sanitize_telemetry_value(flow_gps);
 
     format!(
-        "{{\"seq\":{},\"temperature_c\":{:.3},\"pressure_bar\":{:.3},\"pressure_psi\":{:.3}}}",
-        seq, temperature_c, pressure_bar, pressure_psi
+        "{{\"seq\":{},\"temperature_c\":{:.3},\"pressure_bar\":{:.3},\"pressure_psi\":{:.3},\"scale_connected\":{},\"weight_g\":{:.3},\"flow_gps\":{:.3}}}",
+        seq,
+        temperature_c,
+        pressure_bar,
+        pressure_psi,
+        if scale_connected { "true" } else { "false" },
+        weight_g,
+        flow_gps,
+    )
+}
+
+fn action_result_json(ok: bool, message: &str) -> String {
+    format!(
+        "{{\"ok\":{},\"message\":\"{}\"}}",
+        if ok { "true" } else { "false" },
+        json_escape(message),
+    )
+}
+
+fn scale_status_json(snapshot: &crate::scale_ble::ScaleStatusSnapshot) -> String {
+    let saved_scale = snapshot.saved_scale.as_ref().map_or_else(
+        || "null".to_owned(),
+        |saved| {
+            format!(
+                "{{\"address\":\"{}\",\"name\":\"{}\",\"addr_type\":\"{}\"}}",
+                json_escape(&saved.address),
+                json_escape(&saved.name),
+                json_escape(&saved.addr_type),
+            )
+        },
+    );
+
+    let mut devices_json = String::from("[");
+    for (idx, device) in snapshot.devices.iter().enumerate() {
+        if idx > 0 {
+            devices_json.push(',');
+        }
+        devices_json.push_str(&format!(
+            "{{\"address\":\"{}\",\"name\":\"{}\",\"address_type\":\"{}\",\"rssi\":{},\"protocol_hint\":\"{}\",\"saved\":{}}}",
+            json_escape(&device.address),
+            json_escape(&device.name),
+            json_escape(&device.address_type),
+            device.rssi,
+            json_escape(&device.protocol_hint),
+            if device.saved { "true" } else { "false" },
+        ));
+    }
+    devices_json.push(']');
+
+    let battery_json = snapshot
+        .battery_percent
+        .map(|battery| battery.to_string())
+        .unwrap_or_else(|| "null".to_owned());
+
+    format!(
+        "{{\"available\":{},\"state\":\"{}\",\"message\":\"{}\",\"connected_name\":\"{}\",\"connected_address\":\"{}\",\"protocol\":\"{}\",\"weight_g\":{:.3},\"flow_gps\":{:.3},\"battery_percent\":{},\"saved_scale\":{},\"devices\":{}}}",
+        if snapshot.available { "true" } else { "false" },
+        json_escape(&snapshot.state),
+        json_escape(&snapshot.message),
+        json_escape(&snapshot.connected_name),
+        json_escape(&snapshot.connected_address),
+        json_escape(&snapshot.protocol),
+        sanitize_telemetry_value(snapshot.weight_g),
+        sanitize_telemetry_value(snapshot.flow_gps),
+        battery_json,
+        saved_scale,
+        devices_json,
     )
 }
 

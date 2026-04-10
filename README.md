@@ -17,6 +17,7 @@ Then it exposes live data through:
 This repository is firmware-first and currently includes:
 
 - Sensor sampling loop (temperature + pressure)
+- BLE scale scanning, saved pairing, and live weight / flow telemetry
 - Shared in-memory telemetry feed
 - Wi-Fi provisioning flow with captive portal fallback
 - Station-mode dashboard and settings pages
@@ -28,11 +29,12 @@ This repository is firmware-first and currently includes:
 At boot, the firmware:
 
 1. Initializes telemetry state
-2. Starts Wi-Fi setup logic
-3. Tries to connect using saved credentials
-4. Falls back to SoftAP provisioning if needed
-5. Starts station HTTP services when connected
-6. Continuously samples sensors and updates telemetry
+2. Initializes Bluetooth scale support
+3. Starts Wi-Fi setup logic
+4. Tries to connect using saved credentials
+5. Falls back to SoftAP provisioning if needed
+6. Starts station HTTP services when connected
+7. Continuously samples sensors and updates telemetry
 
 Main telemetry loop rate is currently 50 ms.
 
@@ -70,7 +72,9 @@ The UI assets are embedded from `assets/` at compile time via `include_bytes!` /
 - `GET /settings` -> device settings page
 - `GET /health` -> plain `ok`
 - `GET /api/telemetry` -> latest telemetry snapshot JSON
+- `GET /api/scale` -> scale status, saved pairing, and discovered devices JSON
 - `GET /api/settings` -> current device settings JSON
+- `POST /api/scale` -> scale scan / connect / disconnect / forget actions
 - `POST /api/settings` -> update settings (and optionally Wi-Fi credentials)
 - `GET /networks` -> known/safe network list for UI flow
 
@@ -88,14 +92,25 @@ Settings are stored in ESP NVS:
 
 - Namespace `wifi`: SSID and password
 - Namespace `settings`: device label and temperature offset
+- Namespace `scale`: one saved BLE scale address, name, and address type
 
 Current settings API supports:
 
 - Device label updates
 - Temperature offset updates
 - Optional Wi-Fi credential updates
+- One saved BLE scale with scan, connect, disconnect, and forget actions
 
 Wi-Fi updates trigger a reboot to apply network changes.
+
+## Bluetooth Scale Support
+
+OpenBarista now includes BLE-only scale support on the ESP32 side.
+
+- The station dashboard shows live scale weight and estimated flow.
+- The settings page uses a simple pairing flow: Find Scales, tap the device, connect.
+- The firmware saves one preferred scale in NVS and attempts to reconnect it on boot.
+- Compatibility is best-effort generic BLE plus a standards-based weight characteristic path; exact behavior still depends on the scale's protocol.
 
 ## Hardware Configuration
 
