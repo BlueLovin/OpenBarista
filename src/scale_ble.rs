@@ -674,6 +674,7 @@ fn worker_loop(
                         let disc_state = state.clone();
                         let disc_telemetry = telemetry.clone();
                         let disc_name = req.name.clone();
+                        let disc_addr = req.address_text.clone();
                         let disc_abort = abort_signal.clone();
                         client.on_disconnect(move |reason| {
                             println!(
@@ -682,6 +683,18 @@ fn worker_loop(
                             );
                             disc_abort.signal(()); // unblock select
                             let mut s = lock_or_recover(&disc_state);
+                            let is_current = s
+                                .active
+                                .as_ref()
+                                .map(|a| a.address_text.eq_ignore_ascii_case(&disc_addr))
+                                .unwrap_or(false);
+                            if !is_current {
+                                println!(
+                                    "[scale] ignoring stale disconnect callback for {}",
+                                    disc_addr
+                                );
+                                return;
+                            }
                             s.active = None;
                             s.state = ScaleConnectionState::Idle;
                             s.message = format!(
