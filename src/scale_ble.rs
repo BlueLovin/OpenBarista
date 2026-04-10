@@ -723,6 +723,89 @@ fn worker_loop(
                     let mut client = ble_device.new_client();
                     let mut connected = false;
 
+                    // --- Single persistent watchdog thread for the whole
+                    //     retry loop.  Spawning one per attempt leaked 4 KB
+                    //     stacks faster than the ESP-IDF RTOS could reclaim
+                    //     them, causing "Failed to create task!" after ~3
+                    //     attempts. ---
+                    let abort_signal = Arc::new(Signal::<EspRawMutex, ()>::new());
+                    let wd_abort = abort_signal.clone();
+                    let wd_arm = Arc::new(AtomicBool::new(false));
+                    let wd_arm2 = wd_arm.clone();
+                    let wd_done = Arc::new(AtomicBool::new(false));
+                    let wd_done2 = wd_done.clone();
+                    let wd_quit = Arc::new(AtomicBool::new(false));
+                    let wd_quit2 = wd_quit.clone();
+                    let wd_exited = Arc::new(AtomicBool::new(false));
+                    let wd_exited2 = wd_exited.clone();
+                    let wd_addr_text = req.address_text.clone();
+                    let wd_addr_type_str = addr_type_str.clone();
+                    let _wd_handle = thread::Builder::new()
+                        .name("ble-wd".into())
+                        .stack_size(4096)
+                        .spawn(move || {
+                            loop {
+                                // Park until armed or told to quit.
+                                loop {
+                                    if wd_quit2.load(Ordering::Acquire) {
+                                        wd_exited2.store(true, Ordering::Release);
+                                        return;
+                                    }
+                                    if wd_arm2.load(Ordering::Acquire) {
+                                        wd_arm2.store(false, Ordering::Relaxed);
+                                        break;
+                                    }
+                                    thread::sleep(Duration::from_millis(50));
+                                }
+
+                                // Count toward timeout, checking done each tick.
+                                let mut elapsed = 0u32;
+                                let mut timed_out = true;
+                                while elapsed < CONNECT_TIMEOUT_MS {
+                                    thread::sleep(Duration::from_millis(200));
+                                    if wd_done2.load(Ordering::Acquire) {
+                                        timed_out = false;
+                                        break;
+                                    }
+                                    elapsed += 200;
+                                }
+
+                                if timed_out {
+                                    println!(
+                                        "[scale] WATCHDOG: connect timed out after {}ms",
+                                        CONNECT_TIMEOUT_MS
+                                    );
+                                    unsafe {
+                                        esp_idf_svc::sys::ble_gap_conn_cancel();
+                                        if let Some(a) = BLEAddress::from_str(
+                                            &wd_addr_text,
+                                            parse_nimble_addr_type(&wd_addr_type_str),
+                                        ) {
+                                            let ble_addr: esp_idf_svc::sys::ble_addr_t = a.into();
+                                            let mut desc: esp_idf_svc::sys::ble_gap_conn_desc =
+                                                core::mem::zeroed();
+                                            if esp_idf_svc::sys::ble_gap_conn_find_by_addr(
+                                                &ble_addr,
+                                                &mut desc,
+                                            ) == 0
+                                            {
+                                                println!(
+                                                    "[scale] WATCHDOG: terminating conn_handle={}",
+                                                    desc.conn_handle
+                                                );
+                                                esp_idf_svc::sys::ble_gap_terminate(
+                                                    desc.conn_handle,
+                                                    esp_idf_svc::sys::ble_error_codes_BLE_ERR_REM_USER_CONN_TERM
+                                                        as _,
+                                                );
+                                            }
+                                        }
+                                    }
+                                    wd_abort.signal(());
+                                }
+                            }
+                        });
+
                     for attempt in 1..=CONNECT_MAX_ATTEMPTS {
                         // Check if user cancelled between retries
                         {
@@ -749,53 +832,10 @@ fn worker_loop(
                             }
                         }
 
-                        // Watchdog: abort after timeout if connect() hasn't
-                        // returned.  Handles both the GAP-connect phase (30s
-                        // default timeout is too long) and the library's MTU-
-                        // exchange hang (no timeout at all).
-                        let abort_signal = Arc::new(Signal::<EspRawMutex, ()>::new());
-                        let wd_abort = abort_signal.clone();
-                        let wd_addr_text = req.address_text.clone();
-                        let wd_addr_type_str = addr_type_str.clone();
-                        let wd_done = Arc::new(AtomicBool::new(false));
-                        let wd_done2 = wd_done.clone();
-                        let wd_exited = Arc::new(AtomicBool::new(false));
-                        let wd_exited2 = wd_exited.clone();
-                        let _wd_handle = thread::Builder::new()
-                            .name("ble-wd".into())
-                            .stack_size(4096)
-                            .spawn(move || {
-                                let mut elapsed = 0u32;
-                                while elapsed < CONNECT_TIMEOUT_MS {
-                                    thread::sleep(Duration::from_millis(200));
-                                    if wd_done2.load(Ordering::Relaxed) {
-                                        wd_exited2.store(true, Ordering::Release);
-                                        return;
-                                    }
-                                    elapsed += 200;
-                                }
-                                println!("[scale] WATCHDOG: connect timed out after {}ms", CONNECT_TIMEOUT_MS);
-                                unsafe {
-                                    esp_idf_svc::sys::ble_gap_conn_cancel();
-                                    if let Some(a) = BLEAddress::from_str(&wd_addr_text, parse_nimble_addr_type(&wd_addr_type_str)) {
-                                        let ble_addr: esp_idf_svc::sys::ble_addr_t = a.into();
-                                        let mut desc: esp_idf_svc::sys::ble_gap_conn_desc =
-                                            core::mem::zeroed();
-                                        if esp_idf_svc::sys::ble_gap_conn_find_by_addr(
-                                            &ble_addr, &mut desc,
-                                        ) == 0
-                                        {
-                                            println!("[scale] WATCHDOG: terminating conn_handle={}", desc.conn_handle);
-                                            esp_idf_svc::sys::ble_gap_terminate(
-                                                desc.conn_handle,
-                                                esp_idf_svc::sys::ble_error_codes_BLE_ERR_REM_USER_CONN_TERM as _,
-                                            );
-                                        }
-                                    }
-                                }
-                                wd_abort.signal(());
-                                wd_exited2.store(true, Ordering::Release);
-                            });
+                        // Arm the watchdog for this attempt.
+                        abort_signal.reset();
+                        wd_done.store(false, Ordering::Relaxed);
+                        wd_arm.store(true, Ordering::Release);
 
                         // Race connect() against the abort signal.
                         println!("[scale] calling client.connect() (attempt {attempt}/{CONNECT_MAX_ATTEMPTS})");
@@ -811,14 +851,8 @@ fn worker_loop(
                                 None
                             }
                         };
-                        // Signal the watchdog to stop and spin-wait for it
-                        // to finish.  We avoid pthread_join because ESP-IDF's
-                        // TLS destructor cleanup crashes on xtensa when
-                        // joining short-lived threads.
-                        wd_done.store(true, Ordering::Relaxed);
-                        while !wd_exited.load(Ordering::Acquire) {
-                            thread::sleep(Duration::from_millis(10));
-                        }
+                        // Tell the watchdog this attempt is done.
+                        wd_done.store(true, Ordering::Release);
 
                         match connect_result {
                             Some(Ok(())) => {
@@ -876,6 +910,12 @@ fn worker_loop(
                             }
                         }
                     } // end retry loop
+
+                    // Shut down the persistent watchdog thread.
+                    wd_quit.store(true, Ordering::Release);
+                    while !wd_exited.load(Ordering::Acquire) {
+                        thread::sleep(Duration::from_millis(10));
+                    }
 
                     // --- Post-connect: service discovery (only if connected) ---
                     if connected {
