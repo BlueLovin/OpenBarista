@@ -9,6 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Result};
 use embassy_futures::select::{select, Either};
+use embassy_futures::yield_now;
 use embassy_sync::signal::Signal;
 use esp_idf_hal::task::block_on;
 use esp_idf_hal::task::embassy_sync::EspRawMutex;
@@ -23,6 +24,7 @@ use openbarista::telemetry_math::{sanitize_weight_g, FlowEstimator};
 
 const SCALE_SCAN_DURATION_S: u32 = 6;
 const CONNECT_TIMEOUT_MS: u32 = 12_000;
+const CONNECT_MAX_ATTEMPTS: u32 = 3;
 const MAX_DISCOVERED_SCALES: usize = 18;
 const SCALE_READY_MESSAGE: &str = "Bluetooth scale ready. Tap Find Scales to pair.";
 const SCALE_STARTUP_MESSAGE: &str = "Starting Bluetooth scale transport...";
@@ -634,168 +636,179 @@ fn worker_loop(
                         req.addr_type_str,
                     );
 
-                    let mut client = ble_device.new_client();
+                    // --- Retry loop for flaky BLE connections ---
+                    let mut connected_client: Option<esp32_nimble::BLEClient> = None;
 
-                    // Abort signal — signaled by the watchdog or disconnect
-                    // callback so that select() can break out of a hung
-                    // client.connect().await.
-                    let abort_signal = Arc::new(Signal::<EspRawMutex, ()>::new());
-
-                    // Disconnect callback (runs on NimBLE host task)
-                    let disc_state = state.clone();
-                    let disc_telemetry = telemetry.clone();
-                    let disc_name = req.name.clone();
-                    let disc_abort = abort_signal.clone();
-                    client.on_disconnect(move |reason| {
-                        println!(
-                            "[scale] disconnected from {} (reason={reason})",
-                            display_scale_name(&disc_name)
-                        );
-                        disc_abort.signal(()); // unblock select
-                        let mut s = lock_or_recover(&disc_state);
-                        s.active = None;
-                        s.state = ScaleConnectionState::Idle;
-                        s.message = format!(
-                            "Disconnected from {}.",
-                            display_scale_name(&disc_name)
-                        );
-                        s.reset_live_values();
-                        disc_telemetry.clear_scale();
-                    });
-
-                    // Watchdog: abort after 12 seconds if connect() hasn't
-                    // returned.  Handles both the GAP-connect phase (30s
-                    // default timeout is too long) and the library's MTU-
-                    // exchange hang (no timeout at all).
-                    let wd_abort = abort_signal.clone();
-                    let wd_addr_text = req.address_text.clone();
-                    let wd_addr_type_str = addr_type_str.clone();
-                    let wd_done = Arc::new(AtomicBool::new(false));
-                    let wd_done2 = wd_done.clone();
-                    let _ = thread::Builder::new()
-                        .name("ble-wd".into())
-                        .stack_size(4096)
-                        .spawn(move || {
-                            let mut elapsed = 0u32;
-                            while elapsed < CONNECT_TIMEOUT_MS {
-                                thread::sleep(Duration::from_millis(200));
-                                if wd_done2.load(Ordering::Relaxed) {
-                                    return;
-                                }
-                                elapsed += 200;
+                    for attempt in 1..=CONNECT_MAX_ATTEMPTS {
+                        // Check if user cancelled between retries
+                        {
+                            let s = lock_or_recover(&state);
+                            if s.active.is_none() {
+                                println!("[scale] connect cancelled by user before attempt {attempt}");
+                                break;
                             }
-                            println!("[scale] WATCHDOG: connect timed out after {}ms", CONNECT_TIMEOUT_MS);
-                            unsafe {
-                                // Cancel pending connect attempt — makes
-                                // BLEClient::connect() return Err for the
-                                // GAP-connect phase.
-                                esp_idf_svc::sys::ble_gap_conn_cancel();
-                                // Also terminate any established connection
-                                // (handles the MTU-exchange hang where
-                                // connect succeeded but signal was never
-                                // fired).
-                                if let Some(a) = BLEAddress::from_str(&wd_addr_text, parse_nimble_addr_type(&wd_addr_type_str)) {
-                                    let ble_addr: esp_idf_svc::sys::ble_addr_t = a.into();
-                                    let mut desc: esp_idf_svc::sys::ble_gap_conn_desc =
-                                        core::mem::zeroed();
-                                    if esp_idf_svc::sys::ble_gap_conn_find_by_addr(
-                                        &ble_addr, &mut desc,
-                                    ) == 0
-                                    {
-                                        println!("[scale] WATCHDOG: terminating conn_handle={}", desc.conn_handle);
-                                        esp_idf_svc::sys::ble_gap_terminate(
-                                            desc.conn_handle,
-                                            esp_idf_svc::sys::ble_error_codes_BLE_ERR_REM_USER_CONN_TERM as _,
-                                        );
-                                    }
-                                }
-                            }
-                            wd_abort.signal(());
-                        });
-
-                    // Race connect() against the abort signal.
-                    // If connect() hangs (MTU exchange bug in the library,
-                    // or 30s default timeout is too long), the abort signal
-                    // fires and we break out.
-                    println!("[scale] calling client.connect()");
-                    let connect_result = match select(
-                        client.connect(&addr),
-                        abort_signal.wait(),
-                    )
-                    .await
-                    {
-                        Either::First(result) => Some(result),
-                        Either::Second(()) => {
-                            println!("[scale] connect aborted by signal");
-                            None
                         }
-                    };
-                    // Cancel the watchdog thread.
-                    wd_done.store(true, Ordering::Relaxed);
 
-                    match connect_result {
-                        Some(Ok(())) => {
-                            // Check if the connect was cancelled while
-                            // we waited (user pressed disconnect/scan).
-                            {
-                                let s = lock_or_recover(&state);
-                                if s.active.is_none() {
-                                    println!("[scale] connect succeeded but was cancelled, dropping");
-                                    let _ = client.disconnect();
-                                    continue;
-                                }
-                            }
-
-                            println!("[scale] connected to {}", req.address_text);
-
+                        if attempt > 1 {
+                            println!("[scale] retrying connect (attempt {attempt}/{CONNECT_MAX_ATTEMPTS})");
+                            cancel_gap_operations();
+                            // Brief pause before retry to let the controller settle
+                            yield_now().await;
                             {
                                 let mut s = lock_or_recover(&state);
-                                s.state = ScaleConnectionState::Discovering;
                                 s.message = format!(
-                                    "Connected to {}. Discovering weight channel...",
+                                    "Connecting to {} (attempt {attempt}/{CONNECT_MAX_ATTEMPTS})...",
                                     display_scale_name(&req.name)
                                 );
                             }
+                        }
 
-                            match discover_and_subscribe(
-                                &mut client,
-                                &req.name,
-                                &state,
-                                &telemetry,
-                            )
-                            .await
-                            {
-                                Ok(protocol) => {
-                                    {
-                                        let mut s = lock_or_recover(&state);
-                                        if let Some(active) = s.active.as_mut() {
-                                            active.protocol = protocol;
-                                        }
-                                        s.state = ScaleConnectionState::Ready;
-                                        s.message = format!(
-                                            "Connected to {}.",
-                                            display_scale_name(&req.name)
-                                        );
-                                        s.battery_percent = None;
+                        let mut client = ble_device.new_client();
+
+                        // Abort signal — signaled by the watchdog or disconnect
+                        // callback so that select() can break out of a hung
+                        // client.connect().await.
+                        let abort_signal = Arc::new(Signal::<EspRawMutex, ()>::new());
+
+                        // Disconnect callback (runs on NimBLE host task)
+                        let disc_state = state.clone();
+                        let disc_telemetry = telemetry.clone();
+                        let disc_name = req.name.clone();
+                        let disc_abort = abort_signal.clone();
+                        client.on_disconnect(move |reason| {
+                            println!(
+                                "[scale] disconnected from {} (reason={reason})",
+                                display_scale_name(&disc_name)
+                            );
+                            disc_abort.signal(()); // unblock select
+                            let mut s = lock_or_recover(&disc_state);
+                            s.active = None;
+                            s.state = ScaleConnectionState::Idle;
+                            s.message = format!(
+                                "Disconnected from {}.",
+                                display_scale_name(&disc_name)
+                            );
+                            s.reset_live_values();
+                            disc_telemetry.clear_scale();
+                        });
+
+                        // Watchdog: abort after 12 seconds if connect() hasn't
+                        // returned.  Handles both the GAP-connect phase (30s
+                        // default timeout is too long) and the library's MTU-
+                        // exchange hang (no timeout at all).
+                        let wd_abort = abort_signal.clone();
+                        let wd_addr_text = req.address_text.clone();
+                        let wd_addr_type_str = addr_type_str.clone();
+                        let wd_done = Arc::new(AtomicBool::new(false));
+                        let wd_done2 = wd_done.clone();
+                        let _ = thread::Builder::new()
+                            .name("ble-wd".into())
+                            .stack_size(4096)
+                            .spawn(move || {
+                                let mut elapsed = 0u32;
+                                while elapsed < CONNECT_TIMEOUT_MS {
+                                    thread::sleep(Duration::from_millis(200));
+                                    if wd_done2.load(Ordering::Relaxed) {
+                                        return;
                                     }
-                                    telemetry.update_scale(true, 0.0, 0.0);
-
-                                    // Read battery if available
-                                    read_battery(&mut client, &state).await;
-
-                                    println!(
-                                        "[scale] ready — streaming from {}",
-                                        display_scale_name(&req.name)
-                                    );
-                                    active_client = Some(client);
+                                    elapsed += 200;
                                 }
-                                Err(e) => {
-                                    println!("[scale] discovery failed: {e}");
-                                    let _ = client.disconnect();
+                                println!("[scale] WATCHDOG: connect timed out after {}ms", CONNECT_TIMEOUT_MS);
+                                unsafe {
+                                    // Cancel pending connect attempt — makes
+                                    // BLEClient::connect() return Err for the
+                                    // GAP-connect phase.
+                                    esp_idf_svc::sys::ble_gap_conn_cancel();
+                                    // Also terminate any established connection
+                                    // (handles the MTU-exchange hang where
+                                    // connect succeeded but signal was never
+                                    // fired).
+                                    if let Some(a) = BLEAddress::from_str(&wd_addr_text, parse_nimble_addr_type(&wd_addr_type_str)) {
+                                        let ble_addr: esp_idf_svc::sys::ble_addr_t = a.into();
+                                        let mut desc: esp_idf_svc::sys::ble_gap_conn_desc =
+                                            core::mem::zeroed();
+                                        if esp_idf_svc::sys::ble_gap_conn_find_by_addr(
+                                            &ble_addr, &mut desc,
+                                        ) == 0
+                                        {
+                                            println!("[scale] WATCHDOG: terminating conn_handle={}", desc.conn_handle);
+                                            esp_idf_svc::sys::ble_gap_terminate(
+                                                desc.conn_handle,
+                                                esp_idf_svc::sys::ble_error_codes_BLE_ERR_REM_USER_CONN_TERM as _,
+                                            );
+                                        }
+                                    }
+                                }
+                                wd_abort.signal(());
+                            });
+
+                        // Race connect() against the abort signal.
+                        println!("[scale] calling client.connect() (attempt {attempt}/{CONNECT_MAX_ATTEMPTS})");
+                        let connect_result = match select(
+                            client.connect(&addr),
+                            abort_signal.wait(),
+                        )
+                        .await
+                        {
+                            Either::First(result) => Some(result),
+                            Either::Second(()) => {
+                                println!("[scale] connect aborted by signal");
+                                None
+                            }
+                        };
+                        // Cancel the watchdog thread.
+                        wd_done.store(true, Ordering::Relaxed);
+
+                        match connect_result {
+                            Some(Ok(())) => {
+                                connected_client = Some(client);
+                                break;
+                            }
+                            Some(Err(e)) => {
+                                cancel_gap_operations();
+                                let _ = client.disconnect();
+                                let s = lock_or_recover(&state);
+                                if s.active.is_none() {
+                                    println!("[scale] connect cancelled (err={:?})", e);
+                                    break;
+                                }
+                                drop(s);
+                                if attempt < CONNECT_MAX_ATTEMPTS {
+                                    println!(
+                                        "[scale] connect attempt {attempt} failed: {:?}, will retry",
+                                        e
+                                    );
+                                } else {
+                                    println!("[scale] connect failed after {CONNECT_MAX_ATTEMPTS} attempts: {:?}", e);
                                     let mut s = lock_or_recover(&state);
                                     s.state = ScaleConnectionState::Error;
                                     s.message = format!(
-                                        "Connected to {} but could not find a weight channel: {e}",
+                                        "Could not connect to {} after {CONNECT_MAX_ATTEMPTS} attempts. Make sure the scale is on and nearby.",
+                                        display_scale_name(&req.name)
+                                    );
+                                    s.active = None;
+                                    telemetry.clear_scale();
+                                }
+                            }
+                            None => {
+                                cancel_gap_operations();
+                                let _ = client.disconnect();
+                                let s = lock_or_recover(&state);
+                                if s.active.is_none() {
+                                    println!("[scale] connect cancelled during watchdog abort");
+                                    break;
+                                }
+                                drop(s);
+                                if attempt < CONNECT_MAX_ATTEMPTS {
+                                    println!(
+                                        "[scale] connect attempt {attempt} timed out, will retry"
+                                    );
+                                } else {
+                                    println!("[scale] connect timed out after {CONNECT_MAX_ATTEMPTS} attempts");
+                                    let mut s = lock_or_recover(&state);
+                                    s.state = ScaleConnectionState::Error;
+                                    s.message = format!(
+                                        "Connection to {} timed out after {CONNECT_MAX_ATTEMPTS} attempts. Make sure the scale is on and nearby.",
                                         display_scale_name(&req.name)
                                     );
                                     s.active = None;
@@ -803,42 +816,75 @@ fn worker_loop(
                                 }
                             }
                         }
-                        Some(Err(e)) => {
-                            // Connect failed (timeout, refused, cancelled).
-                            // Cancel pending GAP ops and clean up.
-                            cancel_gap_operations();
-                            let _ = client.disconnect();
-                            let mut s = lock_or_recover(&state);
-                            if s.active.is_some() {
-                                println!("[scale] connect failed: {:?}", e);
-                                s.state = ScaleConnectionState::Error;
-                                s.message = format!(
-                                    "Could not connect to {}. Make sure the scale is on and nearby.",
-                                    display_scale_name(&req.name)
-                                );
-                                s.active = None;
-                                telemetry.clear_scale();
-                            } else {
-                                println!("[scale] connect cancelled (err={:?})", e);
+                    } // end retry loop
+
+                    // --- Post-connect: service discovery (only if we got a client) ---
+                    if let Some(mut client) = connected_client {
+                        // Check if the connect was cancelled while we waited
+                        {
+                            let s = lock_or_recover(&state);
+                            if s.active.is_none() {
+                                println!("[scale] connect succeeded but was cancelled, dropping");
+                                let _ = client.disconnect();
+                                continue;
                             }
                         }
-                        None => {
-                            // Aborted by watchdog or early disconnect.
-                            // The connect future was dropped; clean up any
-                            // residual GAP state before dropping the client.
-                            cancel_gap_operations();
-                            let _ = client.disconnect();
+
+                        println!("[scale] connected to {}", req.address_text);
+
+                        {
                             let mut s = lock_or_recover(&state);
-                            if s.active.is_some() {
+                            s.state = ScaleConnectionState::Discovering;
+                            s.message = format!(
+                                "Connected to {}. Discovering weight channel...",
+                                display_scale_name(&req.name)
+                            );
+                        }
+
+                        match discover_and_subscribe(
+                            &mut client,
+                            &req.name,
+                            &state,
+                            &telemetry,
+                        )
+                        .await
+                        {
+                            Ok(protocol) => {
+                                {
+                                    let mut s = lock_or_recover(&state);
+                                    if let Some(active) = s.active.as_mut() {
+                                        active.protocol = protocol;
+                                    }
+                                    s.state = ScaleConnectionState::Ready;
+                                    s.message = format!(
+                                        "Connected to {}.",
+                                        display_scale_name(&req.name)
+                                    );
+                                    s.battery_percent = None;
+                                }
+                                telemetry.update_scale(true, 0.0, 0.0);
+
+                                // Read battery if available
+                                read_battery(&mut client, &state).await;
+
+                                println!(
+                                    "[scale] ready — streaming from {}",
+                                    display_scale_name(&req.name)
+                                );
+                                active_client = Some(client);
+                            }
+                            Err(e) => {
+                                println!("[scale] discovery failed: {e}");
+                                let _ = client.disconnect();
+                                let mut s = lock_or_recover(&state);
                                 s.state = ScaleConnectionState::Error;
                                 s.message = format!(
-                                    "Connection to {} timed out. Make sure the scale is on and nearby.",
+                                    "Connected to {} but could not find a weight channel: {e}",
                                     display_scale_name(&req.name)
                                 );
                                 s.active = None;
                                 telemetry.clear_scale();
                             }
-                            println!("[scale] connect aborted, client dropped");
                         }
                     }
                 }
