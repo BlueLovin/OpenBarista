@@ -759,7 +759,9 @@ fn worker_loop(
                         let wd_addr_type_str = addr_type_str.clone();
                         let wd_done = Arc::new(AtomicBool::new(false));
                         let wd_done2 = wd_done.clone();
-                        let wd_handle = thread::Builder::new()
+                        let wd_exited = Arc::new(AtomicBool::new(false));
+                        let wd_exited2 = wd_exited.clone();
+                        let _wd_handle = thread::Builder::new()
                             .name("ble-wd".into())
                             .stack_size(4096)
                             .spawn(move || {
@@ -767,6 +769,7 @@ fn worker_loop(
                                 while elapsed < CONNECT_TIMEOUT_MS {
                                     thread::sleep(Duration::from_millis(200));
                                     if wd_done2.load(Ordering::Relaxed) {
+                                        wd_exited2.store(true, Ordering::Release);
                                         return;
                                     }
                                     elapsed += 200;
@@ -791,6 +794,7 @@ fn worker_loop(
                                     }
                                 }
                                 wd_abort.signal(());
+                                wd_exited2.store(true, Ordering::Release);
                             });
 
                         // Race connect() against the abort signal.
@@ -807,11 +811,13 @@ fn worker_loop(
                                 None
                             }
                         };
-                        // Cancel the watchdog thread and wait for it to exit
-                        // so we don't leak stack on fast retries.
+                        // Signal the watchdog to stop and spin-wait for it
+                        // to finish.  We avoid pthread_join because ESP-IDF's
+                        // TLS destructor cleanup crashes on xtensa when
+                        // joining short-lived threads.
                         wd_done.store(true, Ordering::Relaxed);
-                        if let Ok(handle) = wd_handle {
-                            let _ = handle.join();
+                        while !wd_exited.load(Ordering::Acquire) {
+                            thread::sleep(Duration::from_millis(10));
                         }
 
                         match connect_result {
