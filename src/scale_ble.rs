@@ -23,8 +23,8 @@ use openbarista::telemetry_feed::SharedTelemetry;
 use openbarista::telemetry_math::{sanitize_weight_g, FlowEstimator};
 
 const SCALE_SCAN_DURATION_S: u32 = 6;
-const CONNECT_TIMEOUT_MS: u32 = 12_000;
-const CONNECT_MAX_ATTEMPTS: u32 = 3;
+const CONNECT_TIMEOUT_MS: u32 = 2_000;
+const CONNECT_MAX_ATTEMPTS: u32 = 10;
 const MAX_DISCOVERED_SCALES: usize = 18;
 const SCALE_READY_MESSAGE: &str = "Bluetooth scale ready. Tap Find Scales to pair.";
 const SCALE_STARTUP_MESSAGE: &str = "Starting Bluetooth scale transport...";
