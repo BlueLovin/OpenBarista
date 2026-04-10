@@ -1,0 +1,69 @@
+name: ESP32 Release Build
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git \
+            cmake \
+            ninja-build \
+            libclang-dev \
+            pkg-config
+
+      - name: Install stable Rust (bootstrap toolchain)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry and build outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+
+      - name: Install Espressif Rust toolchain and flash tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .esp
+          cargo +stable install espup --locked
+          espup install \
+            --name esp \
+            --targets esp32 \
+            --std \
+            --export-file "${GITHUB_WORKSPACE}/.esp/export-esp.sh"
+          source "${GITHUB_WORKSPACE}/.esp/export-esp.sh"
+          cargo install --locked ldproxy espflash cargo-espflash
+
+      - name: Build release firmware
+        shell: bash
+        run: |
+          set -euo pipefail
+          source "${GITHUB_WORKSPACE}/.esp/export-esp.sh"
+          cargo build --release --target xtensa-esp32-espidf
+
+      - name: Collect flash-ready artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          cp target/xtensa-esp32-espidf/release/openbarista release/openbarista.elf
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openbarista-esp32-release-${{ github.sha }}
+          path: release/openbarista.elf
+          if-no-files-found: error
