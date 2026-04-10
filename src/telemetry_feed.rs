@@ -45,10 +45,9 @@ impl Default for SharedTelemetry {
 }
 
 fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    match mutex.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    }
+    mutex.lock().expect(
+        "telemetry mutex poisoned: refusing to continue with potentially inconsistent state",
+    )
 }
 
 #[cfg(test)]
@@ -90,7 +89,7 @@ mod tests {
     }
 
     #[test]
-    fn poisoned_lock_is_recovered_without_zeroing_data() {
+    fn poisoned_lock_panics_on_next_use() {
         let state = Arc::new(Mutex::new(TelemetrySnapshot {
             seq: 41,
             temperature_c: 95.0,
@@ -106,12 +105,7 @@ mod tests {
         .join();
 
         let telemetry = SharedTelemetry { inner: state };
-        telemetry.update(96.5, 9.3, 134.9);
-
-        let snapshot = telemetry.snapshot();
-        assert_eq!(snapshot.seq, 42);
-        approx_eq(snapshot.temperature_c, 96.5, 1e-6);
-        approx_eq(snapshot.pressure_bar, 9.3, 1e-6);
-        approx_eq(snapshot.pressure_psi, 134.9, 1e-6);
+        let update_result = std::panic::catch_unwind(|| telemetry.update(96.5, 9.3, 134.9));
+        assert!(update_result.is_err());
     }
 }

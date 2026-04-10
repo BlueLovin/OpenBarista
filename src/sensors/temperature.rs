@@ -12,6 +12,11 @@ const CONFIG_3WIRE: u8 = 0x10;
 const CONFIG_FAULTSTAT: u8 = 0x02;
 const RTD_MSB_REG: u8 = 0x01;
 
+const REF_RESISTOR_OHMS: f32 = 430.0;
+const NOMINAL_RESISTANCE_OHMS: f32 = 100.0;
+const IS_THREE_WIRE: bool = true;
+const CALIBRATION_OFFSET_C: f32 = 0.0;
+
 #[derive(Debug, Clone, Copy)]
 pub struct TemperatureReading {
     pub temperature_c: f32,
@@ -30,19 +35,13 @@ where
     SPI: SpiDevice<u8>,
     SPI::Error: core::fmt::Debug,
 {
-    pub fn new(
-        spi: SPI,
-        ref_resistor: f32,
-        nominal_resistance: f32,
-        three_wire: bool,
-        calibration_offset_c: f32,
-    ) -> Result<Self> {
+    pub fn new(spi: SPI) -> Result<Self> {
         let mut sensor = Self {
             spi,
-            ref_resistor,
-            nominal_resistance,
-            three_wire,
-            calibration_offset_c,
+            ref_resistor: REF_RESISTOR_OHMS,
+            nominal_resistance: NOMINAL_RESISTANCE_OHMS,
+            three_wire: IS_THREE_WIRE,
+            calibration_offset_c: CALIBRATION_OFFSET_C,
         };
 
         sensor.initialize()?;
@@ -55,6 +54,10 @@ where
         let temperature_c = self.calculate_temperature(raw_code) + self.calibration_offset_c;
 
         Ok(TemperatureReading { temperature_c })
+    }
+
+    pub fn set_calibration_offset_c(&mut self, calibration_offset_c: f32) {
+        self.calibration_offset_c = calibration_offset_c;
     }
 
     fn initialize(&mut self) -> Result<()> {

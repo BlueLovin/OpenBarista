@@ -1,0 +1,164 @@
+.eyebrow {
+  margin: 0;
+  color: var(--brand-bright);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+h2 {
+  margin: 6px 0 0;
+  font-family: "Space Grotesk", "Avenir Next", "Trebuchet MS", sans-serif;
+  font-size: 1.3rem;
+  letter-spacing: 0.01em;
+}
+
+.hint {
+  margin: 8px 0 0;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+}
+
+.settings-form label {
+  display: block;
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-dim);
+  margin: 0 0 6px;
+  font-weight: 700;
+}
+
+.settings-form input,
+.settings-form select {
+  width: 100%;
+  border: 1px solid #33425f;
+  border-radius: 10px;
+  background: #131c2d;
+  color: #eaf1ff;
+  padding: 10px 11px;
+  margin: 0 0 12px;
+  font-size: 0.9rem;
+}
+
+.settings-form input:focus,
+.settings-form select:focus {
+  border-color: #49689b;
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(73, 104, 155, 0.28);
+}
+
+.ssid-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.ssid-row label {
+  margin: 0;
+}
+
+.btn-secondary {
+  border: 1px solid #35455f;
+  background: #1a2335;
+  color: #d6e4ff;
+  border-radius: 10px;
+  padding: 6px 10px;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+}
+
+.micro-status {
+  margin: -8px 0 12px;
+  color: #9fb0cd;
+  min-height: 1.1rem;
+  font-size: 0.74rem;
+}
+
+#saveSettingsBtn {
+  width: 100%;
+  border: 0;
+  border-radius: 12px;
+  padding: 13px;
+  font-size: 1rem;
+  letter-spacing: 0.05em;
+  font-weight: 800;
+  color: #101820;
+  background: linear-gradient(135deg, var(--brand-bright), var(--brand));
+  box-shadow: 0 12px 30px rgba(255, 122, 47, 0.35);
+}
+
+.btn-block {
+  width: 100%;
+  margin: 2px 0 12px;
+  padding: 10px 12px;
+}
+
+#saveWifiBtn:disabled,
+#saveSettingsBtn:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+.offset-help {
+  margin: -2px 0 12px;
+  padding: 8px 10px;
+  border: 1px dashed #345078;
+  border-radius: 10px;
+  background: rgba(20, 30, 48, 0.6);
+}
+
+.offset-help summary {
+  cursor: pointer;
+  color: #a9c6ff;
+  font-size: 0.76rem;
+  letter-spacing: 0.02em;
+}
+
+.offset-help p {
+  margin: 8px 0 0;
+  color: #b9cae8;
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
+#saveSettingsBtn:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+.status {
+  margin: 12px 0 0;
+  min-height: 1.2rem;
+  font-size: 0.84rem;
+  color: #d8e7ff;
+}
+
+.identity p {
+  margin: 6px 0;
+  color: #c8d5ee;
+  font-size: 0.84rem;
+}
+
+.identity a {
+  color: #95bcff;
+}
+
+code {
+  background: #0f1829;
+  border: 1px solid #2f3e57;
+  border-radius: 5px;
+  padding: 2px 6px;
+  font-family: "Courier New", monospace;
+  color: #d7e7ff;
+}
+
+@media (max-width: 420px) {
+  .settings-shell {
+    gap: 10px;
+  }
+}

@@ -1,48 +1,36 @@
-/* ── OpenBarista · Espresso Profile Monitor ─────────────────────────────────── */
+const POLL_MS = 500;
+const MAX_IDLE_PTS = 600;
+const IDLE_WINDOW_S = 60;
 
-// ── Configuration ─────────────────────────────────────────────────────────────
-
-const POLL_MS = 500; // polling interval (ms)
-const MAX_IDLE_PTS = 600; // max buffered points in idle mode (5 min @ 500ms)
-const IDLE_WINDOW_S = 60; // default rolling window (seconds)
-
-// Fixed Y-axis ranges — tuned for espresso (9+ bar, 85-100 °C boiler temp)
 const P_MIN = 0;
-const P_MAX = 12; // 12 bar covers pre-infusion → over-pressure safety
+const P_MAX = 12;
 const T_MIN = 80;
 const T_MAX = 102;
 
-// ── Target pressure profiles ──────────────────────────────────────────────────
-// Each function receives elapsed shot seconds and returns a bar value (or null).
-// Extend PROFILES here to add your own.
 const PROFILES = {
-  "Flat 9 bar": (t) => 9.0,
-  "Lever (9 → 6 bar)": (t) => Math.max(6.0, 9.0 - 0.1 * Math.max(0, t - 5)),
-  "Pre-infusion (0→4→9)": (t) => (t < 6 ? Math.min(4.0, 0.65 * t) : 9.0),
-  "Blooming (4→9 bar)": (t) =>
+  "Flat 9 bar": (_t) => 9.0,
+  "Lever (9 -> 6 bar)": (t) => Math.max(6.0, 9.0 - 0.1 * Math.max(0, t - 5)),
+  "Pre-infusion (0->4->9)": (t) => (t < 6 ? Math.min(4.0, 0.65 * t) : 9.0),
+  "Blooming (4->9 bar)": (t) =>
     t < 10 ? 4.0 : Math.min(9.0, 4.0 + 0.5 * (t - 10)),
   "Temperature surf": (t) =>
     t < 3 ? 9.0 : Math.max(6.0, 9.0 - 0.06 * (t - 3)),
   None: (_t) => null,
 };
 
-// ── State ─────────────────────────────────────────────────────────────────────
-
 let shotActive = false;
-let shotStartMs = null; // performance.now() snapshot when shot was started
+let shotStartMs = null;
 let lastSeq = -1;
-let idleOffsetS = 0; // monotonic x counter used in idle/monitor mode
+let idleOffsetS = 0;
 let windowS = IDLE_WINDOW_S;
 
-// Parallel arrays fed into uPlot: [xs, pressures, temperatures, targets]
 let xs = [];
 let pressures = [];
 let temperatures = [];
 let targets = [];
 
 let timerHandle = null;
-
-// ── DOM ───────────────────────────────────────────────────────────────────────
+let plot = null;
 
 const $ = (id) => document.getElementById(id);
 
@@ -58,19 +46,14 @@ const profileSel = $("profileSelect");
 const windowSel = $("windowSelect");
 const chartDiv = $("uplotChart");
 
-// ── uPlot ─────────────────────────────────────────────────────────────────────
-
-let plot = null;
-
 function buildPlotOpts(width) {
   return {
     width,
-    height: 270,
+    height: 250,
     cursor: { show: true },
     legend: { live: true },
     scales: {
       x: { time: false },
-      // Fixed Y ranges: pressure 0-12 bar, temperature 80-102 °C
       bar: { range: () => [P_MIN, P_MAX] },
       tmp: { range: () => [T_MIN, T_MAX] },
     },
@@ -78,25 +61,28 @@ function buildPlotOpts(width) {
       {
         label: "t (s)",
         labelSize: 14,
+        stroke: "#8192b5",
+        grid: { stroke: "#1d273a", width: 1 },
+        ticks: { stroke: "#2c3a56", width: 1 },
         values: (_u, ticks) => ticks.map((v) => v.toFixed(0) + "s"),
       },
       {
         scale: "bar",
         label: "bar",
         labelSize: 14,
-        stroke: "#1a6ab5",
-        grid: { stroke: "#ede4da", width: 1 },
-        ticks: { stroke: "#d4c4b4", width: 1 },
+        stroke: "#ff9c66",
+        grid: { stroke: "#1d273a", width: 1 },
+        ticks: { stroke: "#2c3a56", width: 1 },
         values: (_u, ticks) => ticks.map((v) => v.toFixed(1)),
       },
       {
         scale: "tmp",
         side: 1,
-        label: "°C",
+        label: "C",
         labelSize: 14,
-        stroke: "#b85c00",
+        stroke: "#54ebf6",
         grid: { show: false },
-        ticks: { stroke: "#d4c4b4", width: 1 },
+        ticks: { stroke: "#2c3a56", width: 1 },
         values: (_u, ticks) => ticks.map((v) => v.toFixed(0)),
       },
     ],
@@ -105,22 +91,22 @@ function buildPlotOpts(width) {
       {
         label: "Pressure",
         scale: "bar",
-        stroke: "#1a6ab5",
+        stroke: "#ff9553",
         width: 2.5,
-        fill: "rgba(26, 106, 181, 0.07)",
+        fill: "rgba(255, 122, 47, 0.14)",
         points: { show: false },
       },
       {
         label: "Temp",
         scale: "tmp",
-        stroke: "#b85c00",
-        width: 1.5,
+        stroke: "#65a2ff",
+        width: 1.6,
         points: { show: false },
       },
       {
         label: "Target",
         scale: "bar",
-        stroke: "#6a8a1a",
+        stroke: "#c4ff5d",
         width: 1.5,
         dash: [6, 4],
         points: { show: false },
@@ -137,24 +123,75 @@ function initPlot() {
 
 window.addEventListener("resize", () => {
   if (plot && chartDiv) {
-    plot.setSize({ width: Math.max(chartDiv.offsetWidth, 300), height: 270 });
+    plot.setSize({ width: Math.max(chartDiv.offsetWidth, 300), height: 250 });
   }
 });
 
-// ── Profile helpers ────────────────────────────────────────────────────────────
-
 function currentProfileFn() {
   const key = profileSel ? profileSel.value : "Flat 9 bar";
-  return PROFILES[key] ?? PROFILES["None"];
+  return PROFILES[key] ?? PROFILES.None;
 }
 
-// ── Shot timer ─────────────────────────────────────────────────────────────────
+function ensureUplotCss() {
+  if (document.querySelector('link[data-uplot="1"]')) {
+    return;
+  }
+  const css = document.createElement("link");
+  css.rel = "stylesheet";
+  css.href = "/uplot.min.css";
+  css.dataset.uplot = "1";
+  document.head.appendChild(css);
+}
+
+function loadUplotJs() {
+  return new Promise((resolve, reject) => {
+    if (typeof window.uPlot !== "undefined") {
+      resolve();
+      return;
+    }
+
+    const existing = document.querySelector('script[data-uplot="1"]');
+    if (existing) {
+      existing.addEventListener("load", () => resolve(), { once: true });
+      existing.addEventListener(
+        "error",
+        () => reject(new Error("uPlot load failed")),
+        {
+          once: true,
+        },
+      );
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src = "/uplot.min.js";
+    script.defer = true;
+    script.dataset.uplot = "1";
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("uPlot load failed"));
+    document.head.appendChild(script);
+  });
+}
+
+async function bootstrapChartAssets() {
+  ensureUplotCss();
+  try {
+    await loadUplotJs();
+    initPlot();
+  } catch (_err) {
+    if (statusEl) {
+      statusEl.textContent = "Chart unavailable";
+      statusEl.className = "badge";
+    }
+  }
+}
 
 function startTimer() {
   timerHandle = setInterval(() => {
     if (shotStartMs !== null && timerEl) {
-      timerEl.textContent =
-        ((performance.now() - shotStartMs) / 1000).toFixed(2) + "s";
+      timerEl.innerHTML =
+        formatTimer((performance.now() - shotStartMs) / 1000) +
+        "<span>s</span>";
     }
   }, 50);
 }
@@ -166,8 +203,6 @@ function stopTimer() {
   }
 }
 
-// ── Shot control ───────────────────────────────────────────────────────────────
-
 function startShot() {
   xs = [];
   pressures = [];
@@ -175,12 +210,12 @@ function startShot() {
   targets = [];
   shotStartMs = performance.now();
   shotActive = true;
-  windowS = 90; // show up to 90 s shot window
+  windowS = 90;
   if (startBtn) {
-    startBtn.textContent = "Stop Shot";
+    startBtn.textContent = "STOP EXTRACTION";
     startBtn.dataset.active = "1";
   }
-  if (timerEl) timerEl.textContent = "0.00s";
+  if (timerEl) timerEl.innerHTML = "00:00<span>s</span>";
   if (peakBarEl) peakBarEl.textContent = "--";
   if (avgBarEl) avgBarEl.textContent = "--";
   startTimer();
@@ -192,12 +227,17 @@ function stopShot() {
   windowS = IDLE_WINDOW_S;
   stopTimer();
   if (startBtn) {
-    startBtn.textContent = "Start Shot";
+    startBtn.textContent = "START EXTRACTION";
     delete startBtn.dataset.active;
   }
 }
 
-// ── Stats ──────────────────────────────────────────────────────────────────────
+function formatTimer(totalSeconds) {
+  const sec = Math.max(0, Math.floor(totalSeconds));
+  const mm = String(Math.floor(sec / 60)).padStart(2, "0");
+  const ss = String(sec % 60).padStart(2, "0");
+  return `${mm}:${ss}`;
+}
 
 function refreshStats() {
   const valid = pressures.filter((v) => v != null && !isNaN(v));
@@ -208,14 +248,10 @@ function refreshStats() {
   if (avgBarEl) avgBarEl.textContent = avg.toFixed(2) + " bar";
 }
 
-// ── Plot refresh ───────────────────────────────────────────────────────────────
-
 function refreshPlot() {
   if (!plot || !xs.length) return;
 
   const xNow = xs[xs.length - 1];
-
-  // In idle mode slide the visible window; in shot mode show from x=0
   let startIdx = 0;
   if (!shotActive) {
     const cutoff = xNow - windowS;
@@ -234,19 +270,14 @@ function refreshPlot() {
   plot.setScale("x", { min: xMin, max: xMax });
 }
 
-// ── Poll ───────────────────────────────────────────────────────────────────────
-
 async function poll() {
   try {
     const r = await fetch("/api/telemetry", { cache: "no-store" });
     const d = await r.json();
 
-    // Deduplicate by sequence number — the sensor loop runs at 50 ms,
-    // so most polls within the same reading window are skipped here.
     if (d.seq === lastSeq) return;
     lastSeq = d.seq;
 
-    // Compute elapsed-time X value
     let t;
     if (shotActive) {
       t = (performance.now() - shotStartMs) / 1000;
@@ -260,7 +291,6 @@ async function poll() {
     temperatures.push(d.temperature_c);
     targets.push(currentProfileFn()(t));
 
-    // Trim idle buffer to avoid unbounded growth
     if (!shotActive && xs.length > MAX_IDLE_PTS) {
       const drop = xs.length - MAX_IDLE_PTS;
       xs.splice(0, drop);
@@ -269,13 +299,12 @@ async function poll() {
       targets.splice(0, drop);
     }
 
-    // Update metric cards
-    if (tempEl) tempEl.textContent = d.temperature_c.toFixed(2) + " \u00b0C";
-    if (barEl) barEl.textContent = d.pressure_bar.toFixed(2) + " bar";
-    if (psiEl) psiEl.textContent = d.pressure_psi.toFixed(2) + " psi";
+    if (tempEl) tempEl.textContent = d.temperature_c.toFixed(1);
+    if (barEl) barEl.textContent = d.pressure_bar.toFixed(1);
+    if (psiEl) psiEl.textContent = d.pressure_psi.toFixed(1) + " psi";
 
     if (statusEl) {
-      statusEl.textContent = shotActive ? "\u25cf Recording" : "\u25cf Live";
+      statusEl.textContent = shotActive ? "Recording" : "Live";
       statusEl.className = shotActive
         ? "badge badge-recording"
         : "badge badge-live";
@@ -291,8 +320,6 @@ async function poll() {
   }
 }
 
-// ── Events ─────────────────────────────────────────────────────────────────────
-
 if (startBtn) {
   startBtn.addEventListener("click", () => {
     if (shotActive) stopShot();
@@ -306,20 +333,18 @@ if (windowSel) {
   });
 }
 
-// ── Bootstrap ──────────────────────────────────────────────────────────────────
-
 document.addEventListener("DOMContentLoaded", () => {
   if (profileSel) {
     Object.keys(PROFILES).forEach((name, i) => {
       const opt = document.createElement("option");
       opt.value = name;
       opt.textContent = name;
-      if (i === 0) opt.selected = true; // "Flat 9 bar" default
+      if (i === 0) opt.selected = true;
       profileSel.appendChild(opt);
     });
   }
 
-  initPlot();
+  setTimeout(bootstrapChartAssets, 50);
   setInterval(poll, POLL_MS);
   poll();
 });

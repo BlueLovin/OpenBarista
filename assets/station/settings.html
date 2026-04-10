@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenBarista Settings</title>
+    <link rel="stylesheet" href="/base.css" />
+    <link rel="stylesheet" href="/settings.css" />
+    <script src="/settings.js" defer></script>
+  </head>
+  <body>
+    <div class="bg-orb bg-orb-a" aria-hidden="true"></div>
+    <div class="bg-orb bg-orb-b" aria-hidden="true"></div>
+
+    <main class="settings-shell">
+      <header class="topbar">
+        <div class="brand-wrap">
+          <span class="brand-icon" aria-hidden="true">&#126;</span>
+          <h1>OPENBARISTA</h1>
+        </div>
+        <a class="back-link" href="/">Back</a>
+      </header>
+
+      <section class="panel intro-panel">
+        <p class="eyebrow">Device Control</p>
+        <h2>Machine Settings</h2>
+        <p class="hint">
+          Change your device label and Wi-Fi network from one place.
+        </p>
+      </section>
+
+      <section class="panel form-panel">
+        <form id="deviceSettingsForm" class="settings-form">
+          <label for="deviceLabelInput">Device label</label>
+          <input
+            id="deviceLabelInput"
+            name="device_label"
+            type="text"
+            maxlength="32"
+            placeholder="Kitchen machine"
+          />
+
+          <div class="ssid-row">
+            <label for="ssidSelect">Wi-Fi network</label>
+            <button id="refreshNetworksBtn" type="button" class="btn-secondary">
+              Refresh
+            </button>
+          </div>
+          <select id="ssidSelect" name="ssid" aria-label="Wi-Fi network">
+            <option value="">Keep current network</option>
+          </select>
+          <p id="networkStatus" class="micro-status">
+            Loading available networks...
+          </p>
+
+          <label for="passwordInput">Wi-Fi password</label>
+          <input
+            id="passwordInput"
+            name="password"
+            type="password"
+            maxlength="64"
+            placeholder="Only needed when changing Wi-Fi"
+          />
+
+          <button
+            id="saveWifiBtn"
+            type="submit"
+            class="btn-secondary btn-block"
+            data-save-mode="wifi"
+          >
+            Update Wi-Fi
+          </button>
+
+          <label for="temperatureOffsetInput">Temperature offset (C)</label>
+          <input
+            id="temperatureOffsetInput"
+            name="temperature_offset_c"
+            type="number"
+            inputmode="decimal"
+            step="0.1"
+            min="-20"
+            max="20"
+            placeholder="0.0"
+          />
+
+          <details class="offset-help">
+            <summary>How do I set this offset?</summary>
+            <p>
+              Use a proper ice bath: fill a cup with crushed ice, add a little
+              water, stir, and wait until the reading stabilizes.
+            </p>
+            <p>
+              Then set offset so it reads 0.0 C. If it reads -4.6 C, enter +4.6.
+            </p>
+          </details>
+
+          <button id="saveSettingsBtn" type="submit" data-save-mode="device">
+            Save Device Settings
+          </button>
+          <p id="settingsStatus" class="status">Loading settings...</p>
+        </form>
+      </section>
+
+      <section class="panel identity">
+        <p><strong>Build ID:</strong> <code id="buildId">{{BUILD_ID}}</code></p>
+        <p><strong>Board ID:</strong> <code id="boardId">{{BOARD_ID}}</code></p>
+        <p>
+          <strong>mDNS:</strong>
+          <a href="http://openbarista.local"><code>openbarista.local</code></a>
+        </p>
+        <p>
+          <strong>Direct IP:</strong>
+          <a href="http://{{IP_ADDR}}"
+            ><code id="directIp">{{IP_ADDR}}</code></a
+          >
+        </p>
+      </section>
+    </main>
+  </body>
+</html>

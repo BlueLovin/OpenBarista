@@ -3,18 +3,31 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>OpenBarista - Connecting</title>
+    <title>OpenBarista - Rebooting</title>
+    <link rel="stylesheet" href="/base.css" />
+    <link rel="stylesheet" href="/settings.css" />
     <link rel="stylesheet" href="/portal.css" />
   </head>
   <body>
-    <main class="card card-success">
-      <h1>Connecting...</h1>
-      <p>Credentials saved. The device is restarting.</p>
-      <p>
-        Reconnect your phone or laptop to your home WiFi, then visit
-        <code>http://openbarista.local</code>
-      </p>
-      <p class="hint">This may take up to 30 seconds.</p>
+    <div class="bg-orb bg-orb-a" aria-hidden="true"></div>
+    <div class="bg-orb bg-orb-b" aria-hidden="true"></div>
+    <main class="settings-shell portal-shell">
+      <section class="panel intro-panel success-panel">
+        <p class="eyebrow">OpenBarista</p>
+        <h2>Applying your network settings</h2>
+        <p class="hint">
+          Credentials were saved. The device is restarting now.
+        </p>
+        <p>
+          Reconnect to your home Wi-Fi, then visit
+          <code>http://openbarista.local</code>
+        </p>
+        <p>
+          Build: <code>{{BUILD_ID}}</code><br />
+          Board: <code>{{BOARD_ID}}</code>
+        </p>
+        <p class="hint">This may take up to 30 seconds.</p>
+      </section>
     </main>
   </body>
 </html>

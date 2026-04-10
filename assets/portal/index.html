@@ -3,49 +3,75 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>OpenBarista Setup</title>
+    <title>OpenBarista Provisioning</title>
+    <link rel="stylesheet" href="/base.css" />
+    <link rel="stylesheet" href="/settings.css" />
     <link rel="stylesheet" href="/portal.css" />
     <script src="/portal.js" defer></script>
   </head>
   <body>
-    <main class="card">
-      <h1>OpenBarista</h1>
-      <p class="subtitle">Connect your device to your home WiFi network.</p>
+    <div class="bg-orb bg-orb-a" aria-hidden="true"></div>
+    <div class="bg-orb bg-orb-b" aria-hidden="true"></div>
 
-      <form method="POST" action="/connect">
-        <label for="networkSelect">Nearby Networks</label>
-        <div class="row">
-          <select id="networkSelect" aria-label="Nearby networks">
-            <option value="">Scanning...</option>
-          </select>
-          <button class="btn-secondary" type="button" id="refreshBtn">
-            Refresh
-          </button>
+    <main class="settings-shell portal-shell">
+      <header class="topbar">
+        <div class="brand-wrap">
+          <span class="brand-icon" aria-hidden="true">&#126;</span>
+          <h1>OPENBARISTA</h1>
         </div>
+        <span class="badge" id="connectStageBadge">Booting...</span>
+      </header>
 
-        <label for="ssid">WiFi Network Name (SSID)</label>
-        <input
-          type="text"
-          id="ssid"
-          name="ssid"
-          required
-          maxlength="32"
-          autocomplete="off"
-          autocorrect="off"
-          spellcheck="false"
-        />
-        <p id="netStatus" class="status">Scanning nearby networks...</p>
+      <section class="panel intro-panel">
+        <p class="eyebrow">Network Provisioning</p>
+        <h2>Bring your espresso station online</h2>
+        <p class="hint" id="portalStatusText">Starting Wi-Fi services...</p>
+      </section>
 
-        <label for="password">Password</label>
-        <input
-          type="password"
-          id="password"
-          name="password"
-          maxlength="64"
-          autocomplete="off"
-        />
-        <button type="submit">Connect Device</button>
-      </form>
+      <section class="panel identity">
+        <p><strong>Build ID:</strong> <code>{{BUILD_ID}}</code></p>
+        <p><strong>Board ID:</strong> <code>{{BOARD_ID}}</code></p>
+        <p><strong>Status:</strong> <code id="statusAttempt">booting</code></p>
+      </section>
+
+      <section class="panel form-panel" aria-labelledby="wifi-title">
+        <form method="POST" action="/connect" class="settings-form">
+          <div class="ssid-row">
+            <label for="networkSelect">Nearby Networks</label>
+            <button class="btn-secondary" type="button" id="refreshBtn">
+              Refresh
+            </button>
+          </div>
+          <select id="networkSelect" aria-label="Nearby networks">
+            <option value="">No scan yet</option>
+          </select>
+
+          <label for="ssid">Network Name (SSID)</label>
+          <input
+            type="text"
+            id="ssid"
+            name="ssid"
+            required
+            maxlength="32"
+            autocomplete="off"
+            autocorrect="off"
+            spellcheck="false"
+          />
+          <p id="netStatus" class="micro-status">
+            Click refresh to load networks.
+          </p>
+
+          <label for="password">Password</label>
+          <input
+            type="password"
+            id="password"
+            name="password"
+            maxlength="64"
+            autocomplete="off"
+          />
+          <button type="submit" id="connectBtn">Save Wi-Fi and Reboot</button>
+        </form>
+      </section>
     </main>
   </body>
 </html>

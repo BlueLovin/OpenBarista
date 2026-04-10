@@ -1,66 +1,115 @@
 # OpenBarista
 
-OpenBarista is an ESP32-based espresso telemetry and profiling firmware project written in Rust on top of ESP-IDF.
+OpenBarista is ESP32 firmware for espresso telemetry and on-device monitoring, written in Rust on top of ESP-IDF.
 
-The goal is to measure the two signals that matter most during a shot:
+It samples:
 
-- Brew temperature from a PT100 RTD probe through a MAX31865 interface board
-- Brew pressure from an analog pressure transducer connected to the ESP32 ADC
+- Brew temperature from a PT100 RTD through MAX31865 (SPI)
+- Brew pressure from an analog transducer on ADC1
 
-The firmware streams those readings over the serial console every 500 ms so the machine can be profiled, calibrated, and monitored while testing hardware changes.
+Then it exposes live data through:
 
-## What this repository is
+- Serial logs
+- An embedded HTTP dashboard served directly by the device
 
-This repo contains the embedded firmware, build scripts, and toolchain setup needed to run the telemetry stack on an ESP32.
+## Current Status
 
-It is not a desktop dashboard or data logger by itself. Its current job is to:
+This repository is firmware-first and currently includes:
 
-- initialize the SPI temperature interface
-- sample the pressure sensor through ADC1
-- convert raw sensor data into Celsius, PSI, and bar
-- print telemetry to the serial monitor in a stable loop
+- Sensor sampling loop (temperature + pressure)
+- Shared in-memory telemetry feed
+- Wi-Fi provisioning flow with captive portal fallback
+- Station-mode dashboard and settings pages
+- Persistent Wi-Fi and device settings in ESP NVS
+- Build metadata and stable board identity in the UI
 
-Current serial output format:
+## Runtime Behavior
+
+At boot, the firmware:
+
+1. Initializes telemetry state
+2. Starts Wi-Fi setup logic
+3. Tries to connect using saved credentials
+4. Falls back to SoftAP provisioning if needed
+5. Starts station HTTP services when connected
+6. Continuously samples sensors and updates telemetry
+
+Main telemetry loop rate is currently 50 ms.
+
+Serial output example:
 
 ```text
 Temp: 93.42 C | Pressure: 8.74 bar | Pressure (PSI): 126.79
 ```
 
-## Project goal
+## Wi-Fi Modes
 
-The practical goal of OpenBarista is espresso profiling.
+### Station mode (normal operation)
 
-That means giving you a repeatable live view of:
+If credentials are present and valid, OpenBarista joins your network and serves:
 
-- whether the brew water is near the target temperature
-- how fast pressure builds
-- what peak pressure the system reaches
-- whether hardware or control changes improve shot consistency
+- `http://<device-ip>`
+- `http://openbarista.local` (when mDNS is available)
 
-This firmware is the sensor and telemetry layer for that work.
+### Provisioning mode (captive portal)
 
-## Hardware
+If no credentials are saved, or connection retries fail, the device starts:
 
-The project is currently set up for the following hardware arrangement.
+- Open access point SSID: `OpenBarista`
+- Captive portal / setup server on `http://192.168.4.1`
 
-### Core controller
+Credentials are validated, saved to NVS, and the device reboots.
+
+## Web UI and API
+
+The UI assets are embedded from `assets/` at compile time via `include_bytes!` / `include_str!`.
+
+### Main routes
+
+- `GET /` -> station dashboard
+- `GET /settings` -> device settings page
+- `GET /health` -> plain `ok`
+- `GET /api/telemetry` -> latest telemetry snapshot JSON
+- `GET /api/settings` -> current device settings JSON
+- `POST /api/settings` -> update settings (and optionally Wi-Fi credentials)
+- `GET /networks` -> known/safe network list for UI flow
+
+### Provisioning routes
+
+- `GET /` and captive-detection aliases -> captive setup page
+- `GET /portal.css`, `GET /portal.js` -> captive assets
+- `GET /status` -> connection/provisioning status JSON
+- `GET /networks` -> scanned or known networks (mode dependent)
+- `POST /connect` -> save credentials and reboot
+
+## Settings and Persistence
+
+Settings are stored in ESP NVS:
+
+- Namespace `wifi`: SSID and password
+- Namespace `settings`: device label and temperature offset
+
+Current settings API supports:
+
+- Device label updates
+- Temperature offset updates
+- Optional Wi-Fi credential updates
+
+Wi-Fi updates trigger a reboot to apply network changes.
+
+## Hardware Configuration
+
+### Controller
 
 - ESP32
 
 ### Temperature path
 
-- PT100 RTD temperature probe
-- MAX31865 RTD-to-digital amplifier board
-- 3-wire RTD configuration
+- PT100 RTD probe
+- MAX31865 RTD interface board (3-wire)
+- SPI mode 1
 
-Configuration used by the firmware:
-
-- PT100 nominal resistance: 100.0 ohm
-- Reference resistor: 430.0 ohm
-- Calibration offset: +4.0 C
-- SPI mode: 1
-
-ESP32 pin mapping for the MAX31865:
+Current pin mapping:
 
 - CS: GPIO5
 - SCLK: GPIO18
@@ -69,174 +118,107 @@ ESP32 pin mapping for the MAX31865:
 
 ### Pressure path
 
-- Analog pressure sensor / pressure transducer
-- Sensor output connected to ESP32 GPIO34
-- ADC1 one-shot mode
-- 12 dB attenuation
+- Analog transducer on GPIO34 (ADC1)
+- ADC attenuation: 12 dB
 
-Pressure conversion model used in firmware:
+Conversion model (shared with host-side tests):
 
-- Raw ADC range: 0..4095
-- Voltage calculation: `raw / 4095.0 * 3.3`
-- 0 PSI reference voltage: 0.35 V
-- Full-scale pressure: 200 PSI
-- Full-scale sensor voltage used in conversion: 4.5 V
-- PSI to bar conversion: `1 PSI = 0.0689476 bar`
+- Raw voltage: `raw / 4095.0 * 3.3`
+- Zero reference: `0.35 V`
+- Full-scale voltage: `4.5 V`
+- Full-scale pressure: `200 PSI`
+- PSI -> bar: `1 PSI = 0.0689476 bar`
 
-Important electrical constraint:
+Important: do not drive ESP32 ADC pins above 3.3 V.
 
-The ESP32 ADC input must not be driven above 3.3 V. If the pressure sensor can output more than 3.3 V, you need external scaling or signal conditioning before feeding GPIO34.
+## Toolchain and Build
 
-## Repository layout
+Target and runner are configured in `.cargo/config.toml`:
 
-```text
-.
-├── build.rs
-├── Cargo.toml
-├── rust-toolchain.toml
-├── README.md
-├── scripts/
-│   ├── bootstrap.sh
-│   ├── build.sh
-│   └── flash.sh
-└── src/
-    ├── main.rs
-    └── sensors/
-        ├── mod.rs
-        ├── pressure.rs
-        └── temperature.rs
-```
+- Target: `xtensa-esp32-espidf`
+- Linker: `ldproxy`
+- Runner: `espflash flash --monitor`
 
-Key files:
+Toolchain channel is pinned in `rust-toolchain.toml`:
 
-- `src/main.rs`: board setup, sensor initialization, main telemetry loop
-- `src/sensors/temperature.rs`: MAX31865 driver and PT100 temperature conversion
-- `src/sensors/pressure.rs`: ADC pressure sampling and PSI/bar conversion
-- `scripts/bootstrap.sh`: installs the required Rust and Espressif tooling
-- `scripts/build.sh`: builds the firmware
-- `scripts/flash.sh`: flashes the board and opens the serial monitor
+- `esp`
 
-## Software stack
-
-- Rust
-- ESP-IDF
-- `esp-idf-hal`
-- `esp-idf-svc`
-- `espflash`
-- `espup`
-
-The project target is configured for ESP32 with `xtensa-esp32-espidf`.
-
-## Prerequisites
-
-Install the normal system dependencies first. The repo scripts handle the Rust and Espressif-specific setup, but they do not install OS packages for you.
-
-Debian or Ubuntu:
-
-```sh
-sudo apt-get install git wget flex bison gperf python3 python3-pip python3-venv cmake ninja-build ccache libffi-dev libssl-dev dfu-util libusb-1.0-0 libudev-dev
-```
-
-Arch Linux:
-
-```sh
-sudo pacman -S --needed git wget flex bison gperf python python-pip cmake ninja ccache libffi openssl dfu-util libusb base-devel pkgconf
-```
-
-You also need a working Rust installation with `cargo` and `rustup` available.
+`build.rs` exports `OPENBARISTA_BUILD_ID` using git short SHA + epoch.
 
 ## Setup
 
-From the repository root:
+Install system dependencies first (cmake, python3, git, toolchain prerequisites for ESP-IDF).
+
+Then run:
 
 ```sh
 bash scripts/bootstrap.sh
 ```
 
-What the bootstrap script does:
+What bootstrap does:
 
-- ensures `~/.cargo/bin` is on your shell `PATH`
-- installs `espup` if it is missing
-- installs the Espressif Rust toolchain named `esp`
-- writes a repo-local environment file at `.esp/export-esp.sh`
-- installs `ldproxy`, `espflash`, and `cargo-espflash`
+- Ensures `~/.cargo/bin` is on your PATH
+- Installs `espup` (if missing)
+- Installs Espressif Rust toolchain named `esp`
+- Generates `.esp/export-esp.sh`
+- Installs `ldproxy`, `espflash`, `cargo-espflash`
 
-After bootstrap, open a new shell or source your shell rc file if the script updated your `PATH`.
+## Build and Flash
 
-## Build
-
-To compile the firmware only:
+After environment setup, use normal Cargo flow:
 
 ```sh
-bash scripts/build.sh
+cargo build
+cargo run
 ```
 
-That script:
+Because the runner is configured, `cargo run` flashes and opens monitor output.
 
-- loads `.esp/export-esp.sh`
-- selects the ESP toolchain environment
-- runs `cargo build`
-
-## Flash and monitor
-
-To build, flash, and open the serial monitor:
+If you need explicit env export in your shell session:
 
 ```sh
-bash scripts/flash.sh
+source .esp/export-esp.sh
 ```
 
-That script:
+## Host-Side Tests
 
-- loads `.esp/export-esp.sh`
-- runs `cargo run`
+Math and telemetry logic include host-runnable tests.
 
-The Cargo runner is configured to flash the board and attach a serial monitor, so this is the normal development workflow.
-
-## Firmware behavior
-
-On each loop iteration, the firmware:
-
-- reads the PT100 through the MAX31865 over SPI
-- applies the configured temperature calibration offset
-- reads the pressure sensor from ADC1 on GPIO34
-- converts the pressure reading into PSI and bar
-- prints one telemetry line over serial
-- waits 500 ms before the next sample
-
-## Notes on calibration
-
-Current calibration and conversion values are hard-coded in the firmware.
-
-Temperature:
-
-- PT100 nominal resistance: 100.0 ohm
-- Reference resistor: 430.0 ohm
-- Offset: +4.0 C
-
-Pressure:
-
-- zero-voltage offset: 0.35 V
-- full-scale voltage: 4.5 V
-- full-scale pressure: 200 PSI
-
-If your hardware changes, update the values in the sensor modules before treating the readings as authoritative.
-
-## Development workflow summary
-
-Typical first-time setup:
+Example:
 
 ```sh
-bash scripts/bootstrap.sh
-bash scripts/flash.sh
+cargo test --lib --target x86_64-unknown-linux-gnu
 ```
 
-Typical edit-build-test cycle after setup:
+## Project Layout
 
-```sh
-bash scripts/build.sh
-bash scripts/flash.sh
+```text
+.
+├── assets/
+│   ├── portal/
+│   └── station/
+├── main/
+│   └── idf_component.yml
+├── scripts/
+│   └── bootstrap.sh
+├── src/
+│   ├── lib.rs
+│   ├── main.rs
+│   ├── telemetry_feed.rs
+│   ├── telemetry_math.rs
+│   ├── web_assets.rs
+│   ├── wifi_provision.rs
+│   └── sensors/
+│       ├── mod.rs
+│       ├── pressure.rs
+│       └── temperature.rs
+├── build.rs
+├── Cargo.toml
+└── rust-toolchain.toml
 ```
 
-## Current scope
+## Notes
 
-This repository currently focuses on embedded acquisition and live telemetry. If you later add logging, networking, shot storage, or a UI, those would sit on top of the firmware provided here.
+- Firmware binary builds are intended for xtensa targets.
+- The project currently focuses on embedded sensing, connectivity, and local web UX.
+- No desktop app or cloud backend is required for core operation.
