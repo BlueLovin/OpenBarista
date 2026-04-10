@@ -344,6 +344,10 @@ impl ScaleRuntime {
     }
 
     pub fn connect_address(&self, address: &str) -> Result<String> {
+        if self.worker_tx.is_none() {
+            return Err(anyhow!("Bluetooth is unavailable on this build."));
+        }
+
         let request = {
             let state = lock_or_recover(&self.state);
             if let Some(active) = state.active.as_ref() {
@@ -400,7 +404,13 @@ impl ScaleRuntime {
         self.telemetry.clear_scale();
 
         let message = format!("Connecting to {}...", display_scale_name(&request.name));
-        self.send_command(WorkerCommand::ConnectTarget(request))?;
+        if let Err(e) = self.send_command(WorkerCommand::ConnectTarget(request)) {
+            let mut state = lock_or_recover(&self.state);
+            state.state = ScaleConnectionState::Idle;
+            state.message = "Failed to send connect command.".to_owned();
+            state.active = None;
+            return Err(e);
+        }
         Ok(message)
     }
 
@@ -1241,7 +1251,7 @@ fn parse_weight_measurement(
 
 /// Bookoo BOOKOO_SC_U: service 0x0FFE, char 0xFF11, 20-byte packets.
 /// Header: 03 0B. Byte 6: sign (0x2B='+', 0x2D='-'). Bytes 7-9: weight
-/// big-endian 24-bit int in 0.1 g units.
+/// big-endian 24-bit int in 0.01 g units.
 fn parse_bookoo_weight(value: &[u8]) -> Option<f32> {
     if value.len() < 10 {
         return None;
@@ -1253,12 +1263,15 @@ fn parse_bookoo_weight(value: &[u8]) -> Option<f32> {
     let sign: f32 = if value[6] == 0x2D { -1.0 } else { 1.0 };
     let raw = ((value[7] as u32) << 16) | ((value[8] as u32) << 8) | (value[9] as u32);
     let weight_g = sign * (raw as f32) / 100.0;
-    println!(
-        "[scale] bookoo: sign={} raw={} weight_g={:.1}",
-        if sign < 0.0 { '-' } else { '+' },
-        raw,
-        weight_g
-    );
+    #[cfg(debug_assertions)]
+    {
+        println!(
+            "[scale] bookoo: sign={} raw={} weight_g={:.1}",
+            if sign < 0.0 { '-' } else { '+' },
+            raw,
+            weight_g
+        );
+    }
     Some(sanitize_weight_g(weight_g))
 }
 

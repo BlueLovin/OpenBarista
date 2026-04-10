@@ -8,6 +8,7 @@ const FLOW_EMA_ALPHA: f32 = 0.34;
 const FLOW_DECAY_ALPHA: f32 = 0.62;
 const FLOW_MIN_SAMPLE_MS: u64 = 90;
 const FLOW_WEIGHT_DEADBAND_G: f32 = 0.12;
+const FLOW_SNAP_ZERO_GPS: f32 = 0.05;
 const FLOW_MAX_GPS: f32 = 12.0;
 
 const RTD_A: f32 = 3.9083e-3;
@@ -103,7 +104,7 @@ impl FlowEstimator {
                 + raw_flow_gps * smoothing_alpha;
         }
 
-        if raw_flow_gps == 0.0 && self.smoothed_flow_gps < FLOW_WEIGHT_DEADBAND_G {
+        if raw_flow_gps == 0.0 && self.smoothed_flow_gps < FLOW_SNAP_ZERO_GPS {
             self.smoothed_flow_gps = 0.0;
         }
 

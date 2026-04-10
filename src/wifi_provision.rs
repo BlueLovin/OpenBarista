@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::Duration;
 use std::{
@@ -27,7 +27,6 @@ use esp_idf_svc::{
 };
 
 use crate::{scale_ble::{SavedScale, ScaleRuntime}, web_assets};
-use openbarista::sync_utils::lock_or_panic;
 use openbarista::telemetry_feed::SharedTelemetry;
 
 const NVS_NAMESPACE: &str = "wifi";
@@ -96,6 +95,12 @@ fn station_response_headers<'a>(
         ),
         ("Permissions-Policy", "geolocation=(), microphone=(), camera=()"),
     ]
+}
+
+fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .expect("mutex poisoned: refusing to continue with potentially inconsistent state")
 }
 
 enum RequestBodyError {
@@ -330,7 +335,7 @@ impl WifiRuntime {
     }
 
     pub fn temperature_offset_c(&self) -> f32 {
-        *lock_or_panic(&self.temperature_offset_c)
+        *lock_or_recover(&self.temperature_offset_c)
     }
 }
 
@@ -415,7 +420,7 @@ where
 
         let connect_progress = Arc::new(Mutex::new(ConnectProgress::new(ssid.clone(), 5)));
         {
-            let mut progress = lock_or_panic(&connect_progress);
+            let mut progress = lock_or_recover(&connect_progress);
             progress.stage = "connecting".to_owned();
             progress.message = format!("Trying '{}'...", ssid);
         }
@@ -430,7 +435,7 @@ where
         let mut connected = false;
         for attempt in 1..=5 {
             {
-                let mut progress = lock_or_panic(&connect_progress);
+                let mut progress = lock_or_recover(&connect_progress);
                 progress.stage = "connecting".to_owned();
                 progress.attempt = attempt;
                 progress.message = format!("Connecting to '{}' (attempt {attempt}/5)...", ssid);
@@ -445,7 +450,7 @@ where
 
         if connected {
             {
-                let mut progress = lock_or_panic(&connect_progress);
+                let mut progress = lock_or_recover(&connect_progress);
                 progress.stage = "connected".to_owned();
                 progress.message = format!("Connected to '{}'. Bringing dashboard online...", ssid);
             }
@@ -492,7 +497,7 @@ where
 
         println!("[wifi] Could not connect after retries. Starting provisioning portal...");
         {
-            let mut progress = lock_or_panic(&connect_progress);
+            let mut progress = lock_or_recover(&connect_progress);
             progress.stage = "failed".to_owned();
             progress.message = "Could not connect after retries. Staying in setup mode.".to_owned();
         }
@@ -562,7 +567,7 @@ fn start_connecting_status_portal(
     }
 
     server.fn_handler("/status", Method::Get, move |req| {
-        let payload = connect_progress_json(&lock_or_panic(&progress_for_status));
+        let payload = connect_progress_json(&lock_or_recover(&progress_for_status));
         let headers = response_headers("application/json; charset=utf-8", "no-store");
         req.into_response(200, Some("OK"), &headers)?
             .write_all(payload.as_bytes())?;
@@ -632,7 +637,7 @@ fn start_connecting_status_portal(
         nvs.set_str(NVS_SSID_KEY, &ssid)?;
         nvs.set_str(NVS_PASS_KEY, &pass)?;
         {
-            let mut state = lock_or_panic(&progress_for_connect);
+            let mut state = lock_or_recover(&progress_for_connect);
             state.stage = "rebooting".to_owned();
             state.ssid = ssid.clone();
             state.message = format!("Saved credentials for '{}'. Rebooting...", ssid);
@@ -779,8 +784,8 @@ fn run_captive_portal(
     }
 
     server.fn_handler("/networks", Method::Get, move |req| {
-        *lock_or_panic(&scan_requested_for_handler) = true;
-        let networks = lock_or_panic(&networks_for_handler).clone();
+        *lock_or_recover(&scan_requested_for_handler) = true;
+        let networks = lock_or_recover(&networks_for_handler).clone();
         let payload = networks_json(&networks);
         let headers = response_headers("application/json; charset=utf-8", "no-store");
         req.into_response(200, Some("OK"), &headers)?
@@ -790,7 +795,7 @@ fn run_captive_portal(
 
     let status_for_get = status.clone();
     server.fn_handler("/status", Method::Get, move |req| {
-        let state = lock_or_panic(&status_for_get);
+        let state = lock_or_recover(&status_for_get);
         let (stage, message) = match &*state {
             ProvisionStatus::Idle => (
                 "provisioning",
@@ -858,7 +863,7 @@ fn run_captive_portal(
             let headers = response_headers("text/html; charset=utf-8", "no-store");
             req.into_response(200, Some("OK"), &headers)?
                 .write_all(success_html.as_bytes())?;
-            *lock_or_panic(&status_for_handler) = ProvisionStatus::Rebooting;
+            *lock_or_recover(&status_for_handler) = ProvisionStatus::Rebooting;
         }
 
         Ok::<_, anyhow::Error>(())
@@ -868,7 +873,7 @@ fn run_captive_portal(
     loop {
         thread::sleep(Duration::from_millis(100));
 
-        if matches!(*lock_or_panic(&status), ProvisionStatus::Rebooting) {
+        if matches!(*lock_or_recover(&status), ProvisionStatus::Rebooting) {
             // Give the HTTP response enough time to flush before restarting.
             thread::sleep(Duration::from_millis(1500));
             drop(server);
@@ -877,7 +882,7 @@ fn run_captive_portal(
         }
 
         let should_scan = {
-            let mut requested = lock_or_panic(&scan_requested);
+            let mut requested = lock_or_recover(&scan_requested);
             let value = *requested;
             *requested = false;
             value
@@ -1030,7 +1035,17 @@ pub fn start_station_http_server(
                         name: device.name.clone(),
                         addr_type: device.address_type.clone(),
                     })
-                    .or(snapshot.saved_scale);
+                    .or_else(|| {
+                        snapshot.saved_scale.and_then(|saved_scale| {
+                            if address.is_empty()
+                                || saved_scale.address.eq_ignore_ascii_case(&address)
+                            {
+                                Some(saved_scale)
+                            } else {
+                                None
+                            }
+                        })
+                    });
 
                 let saved_scale = saved_scale
                     .ok_or_else(|| anyhow!("Scan first, then tap a device from the list."))?;
@@ -1048,13 +1063,13 @@ pub fn start_station_http_server(
             _ => Err(anyhow!("Unsupported scale action.")),
         };
 
-        let (status_code, payload) = match result {
-            Ok(message) => (200, action_result_json(true, &message)),
-            Err(err) => (400, action_result_json(false, &err.to_string())),
+        let (status_code, reason_phrase, payload) = match result {
+            Ok(message) => (200, Some("OK"), action_result_json(true, &message)),
+            Err(err) => (400, None, action_result_json(false, &err.to_string())),
         };
 
         let headers = response_headers("application/json; charset=utf-8", "no-store");
-        req.into_response(status_code, Some("OK"), &headers)?
+        req.into_response(status_code, reason_phrase, &headers)?
             .write_all(payload.as_bytes())?;
         Ok::<_, anyhow::Error>(())
     })?;
@@ -1223,7 +1238,7 @@ pub fn start_station_http_server(
         let mut rebooting = false;
         save_device_label(&nvs_for_post, &device_label)?;
         save_temperature_offset(&nvs_for_post, parsed_temperature_offset_c)?;
-        *lock_or_panic(&temperature_offset_for_post) = parsed_temperature_offset_c;
+        *lock_or_recover(&temperature_offset_for_post) = parsed_temperature_offset_c;
 
         if wifi_change_requested {
             let nvs_wifi = EspNvs::new(nvs_for_post.clone(), NVS_NAMESPACE, true)?;
@@ -1300,7 +1315,7 @@ fn refresh_network_cache(
                 .collect();
             names.sort();
             names.dedup();
-            *lock_or_panic(cache) = names;
+            *lock_or_recover(cache) = names;
         }
         Err(err) => {
             println!("[wifi] Scan failed: {err:?}");
