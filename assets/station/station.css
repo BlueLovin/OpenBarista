@@ -4,6 +4,73 @@
   gap: 8px;
 }
 
+.hw-fail-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: #3a1508;
+  border: 1px solid #7a3010;
+  border-radius: 12px;
+  padding: 10px 14px;
+  margin: 0 0 10px;
+  animation: hw-banner-slide-in 200ms ease;
+}
+
+.hw-fail-banner[hidden] {
+  display: none;
+}
+
+@keyframes hw-banner-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.hw-fail-banner.hw-fail-hard {
+  background: #2a0a04;
+  border-color: #5a1808;
+}
+
+.hw-fail-msg {
+  font-size: 0.78rem;
+  color: #ffb89a;
+  font-weight: 600;
+  flex: 1;
+}
+
+.hw-retry-btn {
+  flex-shrink: 0;
+  border: 1px solid #cc5522;
+  border-radius: 8px;
+  background: transparent;
+  color: #ff9c66;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 5px 11px;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.hw-retry-btn:hover {
+  background: #cc5522;
+  color: #fff;
+}
+
+.hw-retry-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .badge {
   border-radius: 999px;
   padding: 5px 10px;
@@ -31,7 +98,7 @@
 }
 
 .metric-grid-main {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .metric-card {
@@ -45,6 +112,10 @@
   background: linear-gradient(160deg, #13212d 0%, #0f1d26 100%);
 }
 
+.metric-card-scale {
+  background: linear-gradient(160deg, #172417 0%, #101b12 100%);
+}
+
 .metric-label {
   margin: 0 0 6px;
   font-size: 0.74rem;
@@ -56,6 +127,10 @@
 
 .metric-card-cool .metric-label {
   color: var(--cyan);
+}
+
+.metric-card-scale .metric-label {
+  color: var(--lime);
 }
 
 .metric-value-wrap {
@@ -79,6 +154,12 @@
   letter-spacing: 0.08em;
   font-size: 0.84rem;
   font-weight: 700;
+}
+
+.metric-caption {
+  margin: 8px 0 0;
+  font-size: 0.74rem;
+  color: var(--text-dim);
 }
 
 .profile-card {
@@ -204,7 +285,7 @@
 }
 
 .metric-grid-secondary {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .mini-card {
@@ -253,6 +334,13 @@
 
 .status-card strong {
   font-size: 1.07rem;
+}
+
+.status-meta {
+  display: block;
+  margin-top: 3px;
+  font-size: 0.72rem;
+  color: var(--text-dim);
 }
 
 .dot {
@@ -338,6 +426,18 @@
 }
 
 @media (max-width: 420px) {
+  .metric-grid-main {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .metric-card-scale {
+    grid-column: 1 / -1;
+  }
+
+  .metric-grid-secondary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .profile-head {
     flex-direction: column;
     align-items: flex-start;

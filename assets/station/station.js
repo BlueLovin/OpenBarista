@@ -1,11 +1,13 @@
-const POLL_MS = 500;
-const MAX_IDLE_PTS = 600;
+const POLL_MS = 250;
+const MAX_IDLE_PTS = 720;
 const IDLE_WINDOW_S = 60;
 
 const P_MIN = 0;
 const P_MAX = 12;
-const T_MIN = 80;
-const T_MAX = 102;
+const FLOW_MIN = 0;
+const FLOW_FALLBACK_MAX = 4;
+const WEIGHT_MIN = 0;
+const WEIGHT_FALLBACK_MAX = 40;
 
 const PROFILES = {
   "Flat 9 bar": (_t) => 9.0,
@@ -23,13 +25,20 @@ let shotStartMs = null;
 let lastSeq = -1;
 let idleOffsetS = 0;
 let windowS = IDLE_WINDOW_S;
+let latestScaleWeightG = 0;
+let latestFlowGps = 0;
+let scaleConnected = false;
+let shotWeightZeroG = null;
 
 let xs = [];
 let pressures = [];
-let temperatures = [];
+let flows = [];
+let weights = [];
 let targets = [];
 
 let timerHandle = null;
+let consecutiveFailures = 0;
+const HW_FAIL_THRESHOLD = 5;
 let plot = null;
 
 const $ = (id) => document.getElementById(id);
@@ -37,7 +46,10 @@ const $ = (id) => document.getElementById(id);
 const statusEl = $("telemetryStatus");
 const tempEl = $("metricTemp");
 const barEl = $("metricBar");
+const weightEl = $("metricWeight");
+const weightHintEl = $("metricWeightHint");
 const psiEl = $("metricPsi");
+const flowEl = $("metricFlow");
 const peakBarEl = $("metricPeakBar");
 const avgBarEl = $("metricAvgBar");
 const timerEl = $("shotTimer");
@@ -45,6 +57,11 @@ const startBtn = $("startShotBtn");
 const profileSel = $("profileSelect");
 const windowSel = $("windowSelect");
 const chartDiv = $("uplotChart");
+const scaleSyncValueEl = $("scaleSyncValue");
+const scaleSyncMetaEl = $("scaleSyncMeta");
+const hwFailBanner = $("hwFailBanner");
+const hwFailMsg = $("hwFailMsg");
+const hwRetryBtn = $("hwRetryBtn");
 
 function buildPlotOpts(width) {
   return {
@@ -55,7 +72,24 @@ function buildPlotOpts(width) {
     scales: {
       x: { time: false },
       bar: { range: () => [P_MIN, P_MAX] },
-      tmp: { range: () => [T_MIN, T_MAX] },
+      flow: {
+        range: (_u, min, max) => [
+          FLOW_MIN,
+          Math.max(
+            FLOW_FALLBACK_MAX,
+            Math.ceil(Math.max(min ?? 0, max ?? 0) + 1),
+          ),
+        ],
+      },
+      weight: {
+        range: (_u, min, max) => [
+          WEIGHT_MIN,
+          Math.max(
+            WEIGHT_FALLBACK_MAX,
+            Math.ceil(Math.max(min ?? 0, max ?? 0) + 2),
+          ),
+        ],
+      },
     },
     axes: [
       {
@@ -76,11 +110,21 @@ function buildPlotOpts(width) {
         values: (_u, ticks) => ticks.map((v) => v.toFixed(1)),
       },
       {
-        scale: "tmp",
+        scale: "flow",
         side: 1,
-        label: "C",
+        label: "g/s",
         labelSize: 14,
-        stroke: "#54ebf6",
+        stroke: "#65a2ff",
+        grid: { show: false },
+        ticks: { stroke: "#2c3a56", width: 1 },
+        values: (_u, ticks) => ticks.map((v) => v.toFixed(1)),
+      },
+      {
+        scale: "weight",
+        side: 1,
+        label: "g",
+        labelSize: 14,
+        stroke: "#74e39a",
         grid: { show: false },
         ticks: { stroke: "#2c3a56", width: 1 },
         values: (_u, ticks) => ticks.map((v) => v.toFixed(0)),
@@ -97,10 +141,18 @@ function buildPlotOpts(width) {
         points: { show: false },
       },
       {
-        label: "Temp",
-        scale: "tmp",
+        label: "Flow",
+        scale: "flow",
         stroke: "#65a2ff",
-        width: 1.6,
+        width: 2,
+        fill: "rgba(101, 162, 255, 0.12)",
+        points: { show: false },
+      },
+      {
+        label: "Weight",
+        scale: "weight",
+        stroke: "#74e39a",
+        width: 2,
         points: { show: false },
       },
       {
@@ -118,7 +170,7 @@ function buildPlotOpts(width) {
 function initPlot() {
   if (!chartDiv || typeof uPlot === "undefined") return;
   const w = Math.max(chartDiv.offsetWidth, 300);
-  plot = new uPlot(buildPlotOpts(w), [[], [], [], []], chartDiv);
+  plot = new uPlot(buildPlotOpts(w), [[], [], [], [], []], chartDiv);
 }
 
 window.addEventListener("resize", () => {
@@ -206,10 +258,12 @@ function stopTimer() {
 function startShot() {
   xs = [];
   pressures = [];
-  temperatures = [];
+  flows = [];
+  weights = [];
   targets = [];
   shotStartMs = performance.now();
   shotActive = true;
+  shotWeightZeroG = scaleConnected ? latestScaleWeightG : 0;
   windowS = 90;
   if (startBtn) {
     startBtn.textContent = "STOP EXTRACTION";
@@ -224,6 +278,7 @@ function startShot() {
 function stopShot() {
   shotActive = false;
   shotStartMs = null;
+  shotWeightZeroG = null;
   windowS = IDLE_WINDOW_S;
   stopTimer();
   if (startBtn) {
@@ -261,7 +316,8 @@ function refreshPlot() {
   plot.setData([
     xs.slice(startIdx),
     pressures.slice(startIdx),
-    temperatures.slice(startIdx),
+    flows.slice(startIdx),
+    weights.slice(startIdx),
     targets.slice(startIdx),
   ]);
 
@@ -270,10 +326,53 @@ function refreshPlot() {
   plot.setScale("x", { min: xMin, max: xMax });
 }
 
+function displayedWeightG() {
+  if (!scaleConnected || !Number.isFinite(latestScaleWeightG)) {
+    return null;
+  }
+
+  if (shotActive && shotWeightZeroG !== null) {
+    return Math.max(0, latestScaleWeightG - shotWeightZeroG);
+  }
+
+  return Math.max(0, latestScaleWeightG);
+}
+
+function refreshScaleUi() {
+  const weight = displayedWeightG();
+
+  if (weightEl) {
+    weightEl.textContent = weight === null ? "--" : weight.toFixed(1);
+  }
+  if (weightHintEl) {
+    weightHintEl.textContent = shotActive
+      ? "Zeroed when extraction started"
+      : scaleConnected
+        ? "Live scale weight"
+        : "Pair a scale in Settings";
+  }
+  if (flowEl) {
+    flowEl.textContent = scaleConnected
+      ? `${latestFlowGps.toFixed(1)} g/s`
+      : "--";
+  }
+  if (scaleSyncValueEl) {
+    scaleSyncValueEl.textContent = scaleConnected ? "Connected" : "Not linked";
+  }
+  if (scaleSyncMetaEl) {
+    scaleSyncMetaEl.textContent = scaleConnected
+      ? "Streaming weight and flow"
+      : "Open Settings to pair a scale";
+  }
+}
+
 async function poll() {
   try {
     const r = await fetch("/api/telemetry", { cache: "no-store" });
     const d = await r.json();
+
+    consecutiveFailures = 0;
+    if (hwFailBanner) hwFailBanner.hidden = true;
 
     if (d.seq === lastSeq) return;
     lastSeq = d.seq;
@@ -288,20 +387,26 @@ async function poll() {
 
     xs.push(t);
     pressures.push(d.pressure_bar);
-    temperatures.push(d.temperature_c);
+    scaleConnected = Boolean(d.scale_connected);
+    latestScaleWeightG = Number.isFinite(d.weight_g) ? d.weight_g : 0;
+    latestFlowGps = Number.isFinite(d.flow_gps) ? d.flow_gps : 0;
+    flows.push(scaleConnected ? latestFlowGps : null);
+    weights.push(scaleConnected ? Math.max(0, latestScaleWeightG) : null);
     targets.push(currentProfileFn()(t));
 
     if (!shotActive && xs.length > MAX_IDLE_PTS) {
       const drop = xs.length - MAX_IDLE_PTS;
       xs.splice(0, drop);
       pressures.splice(0, drop);
-      temperatures.splice(0, drop);
+      flows.splice(0, drop);
+      weights.splice(0, drop);
       targets.splice(0, drop);
     }
 
     if (tempEl) tempEl.textContent = d.temperature_c.toFixed(1);
     if (barEl) barEl.textContent = d.pressure_bar.toFixed(1);
     if (psiEl) psiEl.textContent = d.pressure_psi.toFixed(1) + " psi";
+    refreshScaleUi();
 
     if (statusEl) {
       statusEl.textContent = shotActive ? "Recording" : "Live";
@@ -313,9 +418,23 @@ async function poll() {
     refreshPlot();
     if (shotActive) refreshStats();
   } catch (_e) {
+    consecutiveFailures++;
     if (statusEl) {
       statusEl.textContent = "Disconnected";
       statusEl.className = "badge";
+    }
+    scaleConnected = false;
+    latestFlowGps = 0;
+    refreshScaleUi();
+
+    if (consecutiveFailures >= HW_FAIL_THRESHOLD) {
+      stopPolling();
+      if (hwFailBanner) {
+        if (hwFailMsg) {
+          hwFailMsg.textContent = "Hardware unreachable — check connections.";
+        }
+        hwFailBanner.hidden = false;
+      }
     }
   }
 }
@@ -333,6 +452,37 @@ if (windowSel) {
   });
 }
 
+let pollStopped = false;
+
+function startPolling() {
+  pollStopped = false;
+  schedulePoll();
+}
+
+function stopPolling() {
+  pollStopped = true;
+}
+
+function schedulePoll() {
+  if (pollStopped) return;
+  setTimeout(async () => {
+    await poll();
+    schedulePoll();
+  }, POLL_MS);
+}
+
+if (hwRetryBtn) {
+  hwRetryBtn.addEventListener("click", () => {
+    consecutiveFailures = 0;
+    if (hwFailBanner) hwFailBanner.hidden = true;
+    if (statusEl) {
+      statusEl.textContent = "Reconnecting...";
+      statusEl.className = "badge";
+    }
+    startPolling();
+  });
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   if (profileSel) {
     Object.keys(PROFILES).forEach((name, i) => {
@@ -345,6 +495,5 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   setTimeout(bootstrapChartAssets, 50);
-  setInterval(poll, POLL_MS);
-  poll();
+  startPolling();
 });

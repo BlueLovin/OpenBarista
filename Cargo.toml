@@ -29,8 +29,11 @@ embedded-hal = "1"
 form_urlencoded = "1"
 
 [target.'cfg(target_arch = "xtensa")'.dependencies]
+embassy-futures = "0.1"
+embassy-sync = "0.7"
 esp-idf-hal = { version = "0.46", default-features = false }
 esp-idf-svc = { version = "0.52", default-features = false }
+esp32-nimble = "0.12"
 # Pinned to the exact version that esp-idf-svc 0.52 pulls in, so there is only
 # one copy of the crate in the graph and the Headers trait resolves correctly.
 embedded-svc = "=0.29.0"

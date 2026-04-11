@@ -72,6 +72,16 @@ h2 {
   font-weight: 700;
 }
 
+.btn-chip {
+  border: 1px solid #35455f;
+  background: #111a29;
+  color: #d6e4ff;
+  border-radius: 999px;
+  padding: 8px 12px;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
 .micro-status {
   margin: -8px 0 12px;
   color: #9fb0cd;
@@ -138,6 +148,139 @@ h2 {
   color: #d8e7ff;
 }
 
+.scale-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.scale-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.scale-current {
+  border: 1px solid #314566;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(23, 34, 53, 0.95), rgba(16, 22, 35, 0.95));
+  padding: 12px;
+}
+
+.scale-current-empty {
+  border-style: dashed;
+}
+
+.scale-current strong,
+.scale-device strong {
+  display: block;
+  font-size: 1rem;
+  color: #eff5ff;
+}
+
+.scale-current p,
+.scale-card-copy,
+.scale-empty {
+  margin: 6px 0 0;
+  color: #9fb0cd;
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.scale-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.scale-live-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.scale-live-metric {
+  border: 1px solid #2b3c59;
+  border-radius: 12px;
+  background: rgba(12, 18, 29, 0.72);
+  padding: 10px;
+}
+
+.scale-live-label {
+  display: block;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #8fa4c8;
+}
+
+.scale-live-value {
+  display: block;
+  margin-top: 6px;
+  font-size: 1rem;
+  color: #f3f7ff;
+}
+
+.scale-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.scale-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: #202b3f;
+  color: #c8d8f1;
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.scale-badge-live {
+  background: rgba(196, 255, 93, 0.16);
+  color: #dfffab;
+}
+
+.scale-badge-busy {
+  background: rgba(255, 200, 60, 0.16);
+  color: #ffe0a0;
+}
+
+.scale-list {
+  display: grid;
+  gap: 10px;
+}
+
+.scale-device {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid #2e405d;
+  border-radius: 14px;
+  background: #121b2b;
+  padding: 12px;
+}
+
+.scale-device-body {
+  min-width: 0;
+}
+
+.scale-device-side {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+}
+
 .identity p {
   margin: 6px 0;
   color: #c8d5ee;
@@ -160,5 +303,19 @@ code {
 @media (max-width: 420px) {
   .settings-shell {
     gap: 10px;
+  }
+
+  .scale-head,
+  .scale-device {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .scale-live-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .scale-device-side {
+    align-items: stretch;
   }
 }

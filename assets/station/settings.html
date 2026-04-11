@@ -101,6 +101,29 @@
         </form>
       </section>
 
+      <section class="panel scale-panel">
+        <div class="scale-head">
+          <div>
+            <p class="eyebrow">Bluetooth Scale</p>
+            <h2>Scale Pairing</h2>
+            <p class="hint">
+              Tap Find Scales, then tap your scale. No MAC addresses, UUIDs, or extra setup.
+            </p>
+          </div>
+          <button id="scanScalesBtn" type="button" class="btn-secondary">
+            Find Scales
+          </button>
+        </div>
+
+        <article id="scaleCurrentCard" class="scale-current scale-current-empty">
+          <strong>No scale saved yet</strong>
+          <p>Use Find Scales and tap your scale to save it.</p>
+        </article>
+
+        <p id="scaleStatus" class="status">Checking Bluetooth scale status...</p>
+        <div id="scaleDeviceList" class="scale-list" aria-live="polite"></div>
+      </section>
+
       <section class="panel identity">
         <p><strong>Build ID:</strong> <code id="buildId">{{BUILD_ID}}</code></p>
         <p><strong>Board ID:</strong> <code id="boardId">{{BOARD_ID}}</code></p>

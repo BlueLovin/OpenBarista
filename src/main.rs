@@ -6,9 +6,12 @@ fn main() {
     println!("OpenBarista firmware binary is only supported on xtensa targets.");
 }
 
+mod scale_ble;
 mod sensors;
 mod web_assets;
 mod wifi_provision;
+
+use std::sync::Arc;
 
 use anyhow::Result;
 use embedded_hal::spi::MODE_1;
@@ -20,6 +23,7 @@ use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_hal::spi;
 use esp_idf_hal::spi::{SpiDeviceDriver, SpiDriver};
 use esp_idf_hal::units::FromValueType;
+use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use openbarista::telemetry_feed::SharedTelemetry;
 
 use crate::sensors::pressure::PressureSensor;
@@ -31,11 +35,31 @@ fn main() -> Result<()> {
     esp_idf_svc::sys::link_patches();
 
     let peripherals = Peripherals::take()?;
+    let (wifi_modem, bluetooth_modem) = peripherals.modem.split();
     let pins = peripherals.pins;
+    let nvs_partition = EspDefaultNvsPartition::take()?;
 
     let telemetry = SharedTelemetry::new();
+    let scale_runtime = match scale_ble::ScaleRuntime::try_new(
+        bluetooth_modem,
+        Some(nvs_partition.clone()),
+        telemetry.clone(),
+    ) {
+        Ok(runtime) => Arc::new(runtime),
+        Err(err) => {
+            println!("[scale] BLE runtime unavailable: {err:?}");
+            Arc::new(scale_ble::ScaleRuntime::disabled(format!(
+                "Bluetooth scale support is unavailable right now: {err}"
+            )))
+        }
+    };
 
-    let wifi_runtime = wifi_provision::setup_wifi(peripherals.modem, telemetry.clone())?;
+    let wifi_runtime = wifi_provision::setup_wifi(
+        wifi_modem,
+        nvs_partition,
+        telemetry.clone(),
+        scale_runtime.clone(),
+    )?;
     println!(
         "[main] Connectivity ready at http://{}",
         wifi_runtime.ip_addr()
@@ -86,10 +110,10 @@ fn main() -> Result<()> {
 
         telemetry.update(temperature.temperature_c, pressure.bar, pressure.psi);
 
-        println!(
-            "Temp: {:.2} C | Pressure: {:.2} bar | Pressure (PSI): {:.2}",
-            temperature.temperature_c, pressure.bar, pressure.psi,
-        );
+        // println!(
+        //     "Temp: {:.2} C | Pressure: {:.2} bar | Pressure (PSI): {:.2}",
+        //     temperature.temperature_c, pressure.bar, pressure.psi,
+        // );
 
         FreeRtos::delay_ms(50);
     }

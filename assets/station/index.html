@@ -13,6 +13,19 @@
     <div class="bg-orb bg-orb-b" aria-hidden="true"></div>
 
     <main class="dashboard-shell">
+      <div
+        id="hwFailBanner"
+        class="hw-fail-banner"
+        hidden
+        aria-live="assertive"
+        role="alert"
+      >
+        <span id="hwFailMsg" class="hw-fail-msg"
+          >Hardware unreachable — check connections.</span
+        >
+        <button id="hwRetryBtn" class="hw-retry-btn">Retry</button>
+      </div>
+
       <header class="topbar">
         <div class="brand-wrap">
           <span class="brand-icon" aria-hidden="true">&#126;</span>
@@ -34,6 +47,15 @@
             <strong id="metricBar" class="metric-value">--</strong>
             <span class="metric-unit">bar</span>
           </p>
+        </article>
+
+        <article class="metric-card metric-card-scale">
+          <p class="metric-label">Extraction Weight</p>
+          <p class="metric-value-wrap">
+            <strong id="metricWeight" class="metric-value">--</strong>
+            <span class="metric-unit">g</span>
+          </p>
+          <p id="metricWeightHint" class="metric-caption">Live scale weight</p>
         </article>
 
         <article class="metric-card metric-card-cool">
@@ -88,6 +110,10 @@
           <strong id="metricPsi">--</strong>
         </article>
         <article class="mini-card">
+          <p>Flow</p>
+          <strong id="metricFlow">--</strong>
+        </article>
+        <article class="mini-card">
           <p>Peak Bar</p>
           <strong id="metricPeakBar">--</strong>
         </article>
@@ -109,7 +135,10 @@
           <span class="dot dot-blue" aria-hidden="true"></span>
           <div>
             <p>Scale Sync</p>
-            <strong>Connected</strong>
+            <strong id="scaleSyncValue">Not linked</strong>
+            <span id="scaleSyncMeta" class="status-meta">
+              Open Settings to pair a scale
+            </span>
           </div>
         </article>
       </section>
