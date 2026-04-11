@@ -824,7 +824,7 @@ fn worker_loop(
                             {
                                 let mut s = lock_or_recover(&state);
                                 s.message = format!(
-                                    "Connecting to {} (attempt {attempt}/{CONNECT_MAX_ATTEMPTS})...",
+                                    "Attempting to pair to {}...",
                                     display_scale_name(&req.name)
                                 );
                             }

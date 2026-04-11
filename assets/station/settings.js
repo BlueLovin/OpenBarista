@@ -261,7 +261,7 @@ function renderScaleCurrent(data) {
   if (!scaleCurrentCardEl) return;
   scaleCurrentCardEl.innerHTML = "";
 
-  const connected = Boolean(data.connected_name);
+  const connected = Boolean(data.connected_name) && data.state === "ready";
   const saved = data.saved_scale || null;
   const connectBusy = scaleConnectBusy(data);
 
