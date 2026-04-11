@@ -14,8 +14,8 @@ use esp_idf_hal::task::block_on;
 use esp_idf_hal::task::embassy_sync::EspRawMutex;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 
-use esp32_nimble::{BLEAddress, BLEAddressType, BLEDevice, BLEScan};
 use esp32_nimble::utilities::BleUuid;
+use esp32_nimble::{BLEAddress, BLEAddressType, BLEDevice, BLEScan};
 
 use openbarista::sync_utils::lock_or_recover;
 use openbarista::telemetry_feed::SharedTelemetry;
@@ -34,20 +34,12 @@ const UUID_CHARACTERISTIC_WEIGHT_MEASUREMENT: u16 = 0x2A9D;
 const UUID_SERVICE_BATTERY: u16 = 0x180F;
 const UUID_CHARACTERISTIC_BATTERY_LEVEL: u16 = 0x2A19;
 
-const COMMON_VENDOR_NOTIFY_UUIDS: &[u16] = &[0xFFF1, 0xFFF2, 0xFFF4, 0xFFE1, 0xFFE2, 0xFFE5, 0xFF11];
-const COMMON_VENDOR_SERVICE_UUIDS: &[u16] = &[
-    0xFFF0, 0xFFE0, 0xFFF1, 0xFFE1, 0xFFF5, 0xFFE5, 0x0FFE,
-];
+const COMMON_VENDOR_NOTIFY_UUIDS: &[u16] =
+    &[0xFFF1, 0xFFF2, 0xFFF4, 0xFFE1, 0xFFE2, 0xFFE5, 0xFF11];
+const COMMON_VENDOR_SERVICE_UUIDS: &[u16] =
+    &[0xFFF0, 0xFFE0, 0xFFF1, 0xFFE1, 0xFFF5, 0xFFE5, 0x0FFE];
 const SCALE_NAME_HINTS: &[&str] = &[
-    "scale",
-    "acaia",
-    "felicita",
-    "pearl",
-    "lunar",
-    "decent",
-    "timemore",
-    "mirror",
-    "bookoo",
+    "scale", "acaia", "felicita", "pearl", "lunar", "decent", "timemore", "mirror", "bookoo",
     "atomax",
 ];
 
@@ -264,6 +256,7 @@ pub struct ScaleRuntime {
     worker_tx: Option<Sender<WorkerCommand>>,
     telemetry: SharedTelemetry,
     _worker_thread: Option<thread::JoinHandle<()>>,
+    _reconnect_thread: Option<thread::JoinHandle<()>>,
 }
 
 impl ScaleRuntime {
@@ -273,6 +266,7 @@ impl ScaleRuntime {
             worker_tx: None,
             telemetry: SharedTelemetry::new(),
             _worker_thread: None,
+            _reconnect_thread: None,
         }
     }
 
@@ -301,7 +295,7 @@ impl ScaleRuntime {
         // can just power on the scale and it'll connect automatically.
         let reconn_state = state.clone();
         let reconn_tx = worker_tx.clone();
-        let _reconnect_thread = thread::Builder::new()
+        let reconnect_thread = thread::Builder::new()
             .name("ble-reconn".into())
             .stack_size(4096)
             .spawn(move || {
@@ -359,7 +353,10 @@ impl ScaleRuntime {
                         });
                         s.reset_live_values();
                     }
-                    if reconn_tx.send(WorkerCommand::ConnectTarget(request)).is_err() {
+                    if reconn_tx
+                        .send(WorkerCommand::ConnectTarget(request))
+                        .is_err()
+                    {
                         println!("[scale] auto-reconnect: worker channel closed, stopping");
                         break;
                     }
@@ -371,6 +368,7 @@ impl ScaleRuntime {
             worker_tx: Some(worker_tx),
             telemetry,
             _worker_thread: Some(worker_thread),
+            _reconnect_thread: Some(reconnect_thread),
         })
     }
 
@@ -639,9 +637,10 @@ fn worker_loop(
                                 let scale_like = is_scale_like_name(&name);
 
                                 // Skip our own BLE address
-                                if scan_own_addr.as_deref().map_or(false, |own| {
-                                    own.eq_ignore_ascii_case(&addr_text)
-                                }) {
+                                if scan_own_addr
+                                    .as_deref()
+                                    .map_or(false, |own| own.eq_ignore_ascii_case(&addr_text))
+                                {
                                     return None::<()>;
                                 }
 
@@ -701,10 +700,7 @@ fn worker_loop(
                     let Some(addr) = BLEAddress::from_str(&req.address_text, addr_type) else {
                         let mut s = lock_or_recover(&state);
                         s.state = ScaleConnectionState::Error;
-                        s.message = format!(
-                            "Invalid BLE address: {}",
-                            req.address_text
-                        );
+                        s.message = format!("Invalid BLE address: {}", req.address_text);
                         s.active = None;
                         continue;
                     };
@@ -811,7 +807,9 @@ fn worker_loop(
                         {
                             let s = lock_or_recover(&state);
                             if s.active.is_none() {
-                                println!("[scale] connect cancelled by user before attempt {attempt}");
+                                println!(
+                                    "[scale] connect cancelled by user before attempt {attempt}"
+                                );
                                 break;
                             }
                         }
@@ -839,18 +837,14 @@ fn worker_loop(
 
                         // Race connect() against the abort signal.
                         println!("[scale] calling client.connect() (attempt {attempt}/{CONNECT_MAX_ATTEMPTS})");
-                        let connect_result = match select(
-                            client.connect(&addr),
-                            abort_signal.wait(),
-                        )
-                        .await
-                        {
-                            Either::First(result) => Some(result),
-                            Either::Second(()) => {
-                                println!("[scale] connect aborted by signal");
-                                None
-                            }
-                        };
+                        let connect_result =
+                            match select(client.connect(&addr), abort_signal.wait()).await {
+                                Either::First(result) => Some(result),
+                                Either::Second(()) => {
+                                    println!("[scale] connect aborted by signal");
+                                    None
+                                }
+                            };
                         // Tell the watchdog this attempt is done.
                         wd_done.store(true, Ordering::Release);
 
@@ -943,10 +937,8 @@ fn worker_loop(
                             let mut s = lock_or_recover(&disc_state);
                             s.active = None;
                             s.state = ScaleConnectionState::Idle;
-                            s.message = format!(
-                                "Disconnected from {}.",
-                                display_scale_name(&disc_name)
-                            );
+                            s.message =
+                                format!("Disconnected from {}.", display_scale_name(&disc_name));
                             s.reset_live_values();
                             disc_telemetry.clear_scale();
                         });
@@ -962,13 +954,8 @@ fn worker_loop(
                             );
                         }
 
-                        match discover_and_subscribe(
-                            &mut client,
-                            &req.name,
-                            &state,
-                            &telemetry,
-                        )
-                        .await
+                        match discover_and_subscribe(&mut client, &req.name, &state, &telemetry)
+                            .await
                         {
                             Ok(protocol) => {
                                 {
@@ -977,10 +964,8 @@ fn worker_loop(
                                         active.protocol = protocol;
                                     }
                                     s.state = ScaleConnectionState::Ready;
-                                    s.message = format!(
-                                        "Connected to {}.",
-                                        display_scale_name(&req.name)
-                                    );
+                                    s.message =
+                                        format!("Connected to {}.", display_scale_name(&req.name));
                                     s.battery_percent = None;
                                 }
                                 telemetry.update_scale(true, 0.0, 0.0);
@@ -1051,7 +1036,9 @@ async fn discover_and_subscribe(
             .get_characteristic(BleUuid::from_uuid16(UUID_CHARACTERISTIC_WEIGHT_MEASUREMENT))
             .await
         {
-            if characteristic.can_notify() || characteristic.can_indicate() || characteristic.can_read()
+            if characteristic.can_notify()
+                || characteristic.can_indicate()
+                || characteristic.can_read()
             {
                 println!(
                     "[scale] found standard weight characteristic 0x{:04X} on service 0x{:04X}",
@@ -1109,10 +1096,7 @@ async fn discover_and_subscribe(
 
     // ---- Priority 2: Common vendor services (0xFFF0, 0xFFE0, etc.) ------
     for &svc_uuid16 in COMMON_VENDOR_SERVICE_UUIDS {
-        if let Ok(service) = client
-            .get_service(BleUuid::from_uuid16(svc_uuid16))
-            .await
-        {
+        if let Ok(service) = client.get_service(BleUuid::from_uuid16(svc_uuid16)).await {
             let mut subscribed_any = false;
             let mut seen_uuids = BTreeSet::new();
 
@@ -1123,11 +1107,8 @@ async fn discover_and_subscribe(
                     .get_characteristic(BleUuid::from_uuid16(char_uuid16))
                     .await
                 {
-                    let channel_label = format!(
-                        "{} on service 0x{:04X}",
-                        characteristic.uuid(),
-                        svc_uuid16
-                    );
+                    let channel_label =
+                        format!("{} on service 0x{:04X}", characteristic.uuid(), svc_uuid16);
                     if !seen_uuids.insert(channel_label.clone()) {
                         continue;
                     }
@@ -1135,16 +1116,16 @@ async fn discover_and_subscribe(
                     if characteristic.can_notify() || characteristic.can_indicate() {
                         // Detect Bookoo: service 0x0FFE + char 0xFF11
                         let proto = if svc_uuid16 == 0x0FFE && char_uuid16 == 0xFF11 {
-                            println!(
-                                "[scale] detected Bookoo protocol (svc 0x0FFE / char 0xFF11)"
-                            );
+                            println!("[scale] detected Bookoo protocol (svc 0x0FFE / char 0xFF11)");
                             ScaleProtocol::Bookoo
                         } else {
                             ScaleProtocol::GenericNotify
                         };
                         println!(
                             "[scale] found vendor char 0x{:04X} on service 0x{:04X} proto={}",
-                            char_uuid16, svc_uuid16, proto.as_str()
+                            char_uuid16,
+                            svc_uuid16,
+                            proto.as_str()
                         );
                         subscribe_weight_notifications(
                             characteristic,
@@ -1163,11 +1144,8 @@ async fn discover_and_subscribe(
             // service.
             if let Ok(chars) = service.get_characteristics().await {
                 for characteristic in chars {
-                    let channel_label = format!(
-                        "{} on service 0x{:04X}",
-                        characteristic.uuid(),
-                        svc_uuid16
-                    );
+                    let channel_label =
+                        format!("{} on service 0x{:04X}", characteristic.uuid(), svc_uuid16);
                     if !seen_uuids.insert(channel_label.clone()) {
                         continue;
                     }
@@ -1214,11 +1192,8 @@ async fn discover_and_subscribe(
                 if let Ok(chars) = service.get_characteristics().await {
                     for characteristic in chars {
                         if characteristic.can_notify() || characteristic.can_indicate() {
-                            let channel_label = format!(
-                                "{} on service {}",
-                                characteristic.uuid(),
-                                svc_uuid,
-                            );
+                            let channel_label =
+                                format!("{} on service {}", characteristic.uuid(), svc_uuid,);
                             println!(
                                 "[scale] brute-force: using char {} on service {}",
                                 characteristic.uuid(),
@@ -1244,9 +1219,7 @@ async fn discover_and_subscribe(
         }
     }
 
-    Err(anyhow!(
-        "No weight characteristic found on this device."
-    ))
+    Err(anyhow!("No weight characteristic found on this device."))
 }
 
 async fn subscribe_weight_notifications(
@@ -1290,14 +1263,16 @@ async fn subscribe_weight_notifications(
     });
 
     if characteristic.can_indicate() && !characteristic.can_notify() {
-        characteristic.subscribe_indicate(false).await.map_err(|e| {
-            anyhow!("indication subscribe failed: {e:?}")
-        })?;
+        characteristic
+            .subscribe_indicate(false)
+            .await
+            .map_err(|e| anyhow!("indication subscribe failed: {e:?}"))?;
         println!("[scale] subscribed to indications on {channel_label}");
     } else {
-        characteristic.subscribe_notify(false).await.map_err(|e| {
-            anyhow!("notify subscribe failed: {e:?}")
-        })?;
+        characteristic
+            .subscribe_notify(false)
+            .await
+            .map_err(|e| anyhow!("notify subscribe failed: {e:?}"))?;
         println!("[scale] subscribed to notifications on {channel_label}");
     }
 
@@ -1313,7 +1288,8 @@ async fn subscribe_weight_notifications(
                 );
 
                 let previous_weight_g = lock_or_recover(state).weight_g;
-                if let Some(weight_g) = parse_weight_measurement(protocol, &value, previous_weight_g)
+                if let Some(weight_g) =
+                    parse_weight_measurement(protocol, &value, previous_weight_g)
                 {
                     apply_weight_measurement(state, telemetry, weight_g);
                 }
@@ -1337,10 +1313,7 @@ fn apply_weight_measurement(
     telemetry.update_scale(true, weight_g, flow_gps);
 }
 
-async fn read_battery(
-    client: &mut esp32_nimble::BLEClient,
-    state: &Arc<Mutex<ScaleManagerState>>,
-) {
+async fn read_battery(client: &mut esp32_nimble::BLEClient, state: &Arc<Mutex<ScaleManagerState>>) {
     let service = match client
         .get_service(BleUuid::from_uuid16(UUID_SERVICE_BATTERY))
         .await
@@ -1471,36 +1444,92 @@ fn parse_generic_weight_measurement(value: &[u8], previous_weight_g: f32) -> Opt
         // Little-endian i32
         if window.len() >= 4 {
             let raw = i32::from_le_bytes([window[0], window[1], window[2], window[3]]);
-            consider_raw(&mut best, &mut best_dist, raw as i64, start, half, previous_weight_g);
+            consider_raw(
+                &mut best,
+                &mut best_dist,
+                raw as i64,
+                start,
+                half,
+                previous_weight_g,
+            );
         }
         // Big-endian i32
         if window.len() >= 4 {
             let raw = i32::from_be_bytes([window[0], window[1], window[2], window[3]]);
-            consider_raw(&mut best, &mut best_dist, raw as i64, start, half, previous_weight_g);
+            consider_raw(
+                &mut best,
+                &mut best_dist,
+                raw as i64,
+                start,
+                half,
+                previous_weight_g,
+            );
         }
         // Little-endian 24-bit
         if window.len() >= 3 {
             let raw = (window[0] as i32) | ((window[1] as i32) << 8) | ((window[2] as i32) << 16);
-            consider_raw(&mut best, &mut best_dist, raw as i64, start, half, previous_weight_g);
+            consider_raw(
+                &mut best,
+                &mut best_dist,
+                raw as i64,
+                start,
+                half,
+                previous_weight_g,
+            );
         }
         // Big-endian 24-bit
         if window.len() >= 3 {
             let raw = ((window[0] as i32) << 16) | ((window[1] as i32) << 8) | (window[2] as i32);
-            consider_raw(&mut best, &mut best_dist, raw as i64, start, half, previous_weight_g);
+            consider_raw(
+                &mut best,
+                &mut best_dist,
+                raw as i64,
+                start,
+                half,
+                previous_weight_g,
+            );
         }
         // Little-endian i16 / u16
         if window.len() >= 2 {
             let signed = i16::from_le_bytes([window[0], window[1]]) as i64;
             let unsigned = u16::from_le_bytes([window[0], window[1]]) as i64;
-            consider_raw(&mut best, &mut best_dist, signed, start, half, previous_weight_g);
-            consider_raw(&mut best, &mut best_dist, unsigned, start, half, previous_weight_g);
+            consider_raw(
+                &mut best,
+                &mut best_dist,
+                signed,
+                start,
+                half,
+                previous_weight_g,
+            );
+            consider_raw(
+                &mut best,
+                &mut best_dist,
+                unsigned,
+                start,
+                half,
+                previous_weight_g,
+            );
         }
         // Big-endian i16 / u16
         if window.len() >= 2 {
             let signed = i16::from_be_bytes([window[0], window[1]]) as i64;
             let unsigned = u16::from_be_bytes([window[0], window[1]]) as i64;
-            consider_raw(&mut best, &mut best_dist, signed, start, half, previous_weight_g);
-            consider_raw(&mut best, &mut best_dist, unsigned, start, half, previous_weight_g);
+            consider_raw(
+                &mut best,
+                &mut best_dist,
+                signed,
+                start,
+                half,
+                previous_weight_g,
+            );
+            consider_raw(
+                &mut best,
+                &mut best_dist,
+                unsigned,
+                start,
+                half,
+                previous_weight_g,
+            );
         }
     }
 
@@ -1533,7 +1562,12 @@ fn consider_raw(
         if weight_g <= 0.0 {
             continue;
         }
-        let c = WeightCandidate { weight_g, offset, raw_abs, in_trailer };
+        let c = WeightCandidate {
+            weight_g,
+            offset,
+            raw_abs,
+            in_trailer,
+        };
         let d = candidate_distance(&c, previous_weight_g);
         if d < *best_dist || (d == *best_dist && offset < best.map_or(usize::MAX, |b| b.offset)) {
             *best = Some(c);
@@ -1694,10 +1728,15 @@ fn hex_bytes(bytes: &[u8]) -> String {
 #[cfg(test)]
 #[allow(unused_imports, dead_code)]
 mod tests {
-    use super::{candidate_distance, parse_ascii_weight, parse_generic_weight_measurement, WeightCandidate};
+    use super::{
+        candidate_distance, parse_ascii_weight, parse_generic_weight_measurement, WeightCandidate,
+    };
 
     fn approx_eq(left: f32, right: f32, tolerance: f32) {
-        assert!((left - right).abs() <= tolerance, "left={left}, right={right}");
+        assert!(
+            (left - right).abs() <= tolerance,
+            "left={left}, right={right}"
+        );
     }
 
     #[test]
@@ -1711,8 +1750,8 @@ mod tests {
         // Real Bookoo packet: 44.8g on the scale
         // Weight at bytes 8-9 as BE u16: 0x1180 = 4480 → /100 = 44.8g
         let pkt: [u8; 20] = [
-            0x03, 0x0B, 0x00, 0x00, 0x00, 0x01, 0x2B, 0x00, 0x11, 0x80,
-            0x2B, 0x00, 0x02, 0x50, 0x00, 0x96, 0x01, 0x00, 0x00, 0x5D,
+            0x03, 0x0B, 0x00, 0x00, 0x00, 0x01, 0x2B, 0x00, 0x11, 0x80, 0x2B, 0x00, 0x02, 0x50,
+            0x00, 0x96, 0x01, 0x00, 0x00, 0x5D,
         ];
         let w = parse_generic_weight_measurement(&pkt, 0.0).expect("should parse");
         approx_eq(w, 44.8, 0.5);
@@ -1722,16 +1761,16 @@ mod tests {
     fn generic_parser_tracks_weight_change() {
         // First packet: 44.8g
         let pkt1: [u8; 20] = [
-            0x03, 0x0B, 0x00, 0x00, 0x00, 0x01, 0x2B, 0x00, 0x11, 0x80,
-            0x2B, 0x00, 0x02, 0x50, 0x00, 0x96, 0x01, 0x00, 0x00, 0x5D,
+            0x03, 0x0B, 0x00, 0x00, 0x00, 0x01, 0x2B, 0x00, 0x11, 0x80, 0x2B, 0x00, 0x02, 0x50,
+            0x00, 0x96, 0x01, 0x00, 0x00, 0x5D,
         ];
         let w1 = parse_generic_weight_measurement(&pkt1, 0.0).expect("should parse");
         approx_eq(w1, 44.8, 0.5);
 
         // Second packet: ~0g (bytes 8-9 = 00 00)
         let pkt2: [u8; 20] = [
-            0x03, 0x0B, 0x00, 0x00, 0x00, 0x01, 0x2B, 0x00, 0x00, 0x00,
-            0x2B, 0x00, 0x00, 0x50, 0x00, 0x96, 0x01, 0x00, 0x00, 0xCE,
+            0x03, 0x0B, 0x00, 0x00, 0x00, 0x01, 0x2B, 0x00, 0x00, 0x00, 0x2B, 0x00, 0x00, 0x50,
+            0x00, 0x96, 0x01, 0x00, 0x00, 0xCE,
         ];
         // With seeded previous, should find a candidate near 0, not lock on noise
         let w2 = parse_generic_weight_measurement(&pkt2, w1);
@@ -1746,8 +1785,8 @@ mod tests {
         // Packet where only trailer has non-zero: real weight is 0
         // The parser should NOT pick up 0x0196 at offset 14-15 as a fake weight
         let pkt: [u8; 20] = [
-            0x03, 0x0B, 0x00, 0x00, 0x00, 0x01, 0x2B, 0x00, 0x00, 0x00,
-            0x2B, 0x00, 0x00, 0x50, 0x00, 0x96, 0x01, 0x00, 0x00, 0xCE,
+            0x03, 0x0B, 0x00, 0x00, 0x00, 0x01, 0x2B, 0x00, 0x00, 0x00, 0x2B, 0x00, 0x00, 0x50,
+            0x00, 0x96, 0x01, 0x00, 0x00, 0xCE,
         ];
         // When seeded at 44.8, the parser should find something closer to
         // 44.8 than a random trailer interpretation, or if all "real" candidates

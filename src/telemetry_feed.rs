@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use crate::sync_utils::lock_or_panic;
+use crate::sync_utils::lock_or_recover;
 
 #[derive(Debug, Clone, Copy)]
 pub struct TelemetrySnapshot {
@@ -38,7 +38,7 @@ impl SharedTelemetry {
     }
 
     pub fn update_brew(&self, temperature_c: f32, pressure_bar: f32, pressure_psi: f32) {
-        let mut state = lock_or_panic(&self.inner);
+        let mut state = lock_or_recover(&self.inner);
         state.seq = state.seq.wrapping_add(1);
         state.temperature_c = temperature_c;
         state.pressure_bar = pressure_bar;
@@ -46,7 +46,7 @@ impl SharedTelemetry {
     }
 
     pub fn update_scale(&self, connected: bool, weight_g: f32, flow_gps: f32) {
-        let mut state = lock_or_panic(&self.inner);
+        let mut state = lock_or_recover(&self.inner);
         state.seq = state.seq.wrapping_add(1);
         state.scale_connected = connected;
         state.weight_g = weight_g;
@@ -54,7 +54,7 @@ impl SharedTelemetry {
     }
 
     pub fn clear_scale(&self) {
-        let mut state = lock_or_panic(&self.inner);
+        let mut state = lock_or_recover(&self.inner);
         state.seq = state.seq.wrapping_add(1);
         state.scale_connected = false;
         state.weight_g = 0.0;
@@ -62,7 +62,7 @@ impl SharedTelemetry {
     }
 
     pub fn snapshot(&self) -> TelemetrySnapshot {
-        *lock_or_panic(&self.inner)
+        *lock_or_recover(&self.inner)
     }
 }
 
@@ -163,7 +163,10 @@ mod tests {
         .join();
 
         let telemetry = SharedTelemetry { inner: state };
-        let update_result = std::panic::catch_unwind(|| telemetry.update(96.5, 9.3, 134.9));
-        assert!(update_result.is_err());
+        // With lock_or_recover, the poisoned mutex is recovered and the update
+        // succeeds (accepts potentially inconsistent state rather than crashing).
+        telemetry.update(96.5, 9.3, 134.9);
+        let snap = telemetry.snapshot();
+        approx_eq(snap.temperature_c, 96.5, 0.001);
     }
 }

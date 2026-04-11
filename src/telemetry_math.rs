@@ -73,12 +73,13 @@ impl FlowEstimator {
         };
 
         let delta_ms = timestamp_ms.saturating_sub(previous_timestamp_ms);
-        self.last_weight_g = Some(weight_g);
-        self.last_timestamp_ms = Some(timestamp_ms);
 
         if delta_ms < FLOW_MIN_SAMPLE_MS {
             return self.smoothed_flow_gps;
         }
+
+        self.last_weight_g = Some(weight_g);
+        self.last_timestamp_ms = Some(timestamp_ms);
 
         let delta_weight_g = weight_g - previous_weight_g;
         if delta_weight_g < -0.5 {
@@ -100,8 +101,8 @@ impl FlowEstimator {
             } else {
                 FLOW_EMA_ALPHA
             };
-            self.smoothed_flow_gps = self.smoothed_flow_gps * (1.0 - smoothing_alpha)
-                + raw_flow_gps * smoothing_alpha;
+            self.smoothed_flow_gps =
+                self.smoothed_flow_gps * (1.0 - smoothing_alpha) + raw_flow_gps * smoothing_alpha;
         }
 
         if raw_flow_gps == 0.0 && self.smoothed_flow_gps < FLOW_SNAP_ZERO_GPS {

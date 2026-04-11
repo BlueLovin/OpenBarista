@@ -1238,7 +1238,6 @@ dependencies = [
  "embedded-hal 1.0.0",
  "embedded-svc",
  "embuild",
- "enumset",
  "esp-idf-hal",
  "esp-idf-svc",
  "esp32-nimble",

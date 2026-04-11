@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use std::{
@@ -26,7 +26,10 @@ use esp_idf_svc::{
     },
 };
 
-use crate::{scale_ble::{SavedScale, ScaleRuntime}, web_assets};
+use crate::{
+    scale_ble::{SavedScale, ScaleRuntime},
+    web_assets,
+};
 use openbarista::telemetry_feed::SharedTelemetry;
 
 const NVS_NAMESPACE: &str = "wifi";
@@ -97,11 +100,7 @@ fn station_response_headers<'a>(
     ]
 }
 
-fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .expect("mutex poisoned: refusing to continue with potentially inconsistent state")
-}
+use openbarista::sync_utils::lock_or_recover;
 
 enum RequestBodyError {
     TooLarge,
@@ -231,9 +230,15 @@ fn save_device_label(nvs_partition: &EspDefaultNvsPartition, device_label: &str)
     Ok(())
 }
 
-fn save_temperature_offset(nvs_partition: &EspDefaultNvsPartition, temperature_offset_c: f32) -> Result<()> {
+fn save_temperature_offset(
+    nvs_partition: &EspDefaultNvsPartition,
+    temperature_offset_c: f32,
+) -> Result<()> {
     let nvs_settings = EspNvs::new(nvs_partition.clone(), SETTINGS_NAMESPACE, true)?;
-    nvs_settings.set_str(SETTINGS_TEMP_OFFSET_KEY, &format!("{temperature_offset_c:.3}"))?;
+    nvs_settings.set_str(
+        SETTINGS_TEMP_OFFSET_KEY,
+        &format!("{temperature_offset_c:.3}"),
+    )?;
     Ok(())
 }
 
@@ -272,7 +277,10 @@ fn read_saved_scale(nvs_partition: &EspDefaultNvsPartition) -> Result<Option<Sav
     }))
 }
 
-fn save_saved_scale(nvs_partition: &EspDefaultNvsPartition, saved_scale: &SavedScale) -> Result<()> {
+fn save_saved_scale(
+    nvs_partition: &EspDefaultNvsPartition,
+    saved_scale: &SavedScale,
+) -> Result<()> {
     if saved_scale.address.is_empty()
         || saved_scale.address.len() > MAX_SCALE_ADDR_LEN
         || saved_scale.name.len() > MAX_SCALE_NAME_LEN
@@ -290,9 +298,9 @@ fn save_saved_scale(nvs_partition: &EspDefaultNvsPartition, saved_scale: &SavedS
 
 fn clear_saved_scale(nvs_partition: &EspDefaultNvsPartition) -> Result<()> {
     let nvs_scale = EspNvs::new(nvs_partition.clone(), SCALE_NAMESPACE, true)?;
-    let _ = nvs_scale.remove(SCALE_ADDR_KEY);
-    let _ = nvs_scale.remove(SCALE_NAME_KEY);
-    let _ = nvs_scale.remove(SCALE_ADDR_TYPE_KEY);
+    nvs_scale.remove(SCALE_ADDR_KEY)?;
+    nvs_scale.remove(SCALE_NAME_KEY)?;
+    nvs_scale.remove(SCALE_ADDR_TYPE_KEY)?;
     Ok(())
 }
 
@@ -476,15 +484,14 @@ where
                 #[cfg(any(esp_idf_comp_mdns_enabled, esp_idf_comp_espressif__mdns_enabled))]
                 mdns: start_mdns()?,
             };
-            let station_http_server =
-                start_station_http_server(
-                    &ip_addr,
-                    telemetry,
-                    nvs_for_station_server,
-                    wifi,
-                    temperature_offset_c.clone(),
-                    scale_runtime.clone(),
-                )?;
+            let station_http_server = start_station_http_server(
+                &ip_addr,
+                telemetry,
+                nvs_for_station_server,
+                wifi,
+                temperature_offset_c.clone(),
+                scale_runtime.clone(),
+            )?;
 
             let runtime = WifiRuntime {
                 stack,
@@ -797,19 +804,12 @@ fn run_captive_portal(
     server.fn_handler("/status", Method::Get, move |req| {
         let state = lock_or_recover(&status_for_get);
         let (stage, message) = match &*state {
-            ProvisionStatus::Idle => (
-                "provisioning",
-                "Waiting for Wi-Fi credentials.",
-            ),
-            ProvisionStatus::Rebooting => (
-                "rebooting",
-                "Saved credentials. Rebooting now...",
-            ),
+            ProvisionStatus::Idle => ("provisioning", "Waiting for Wi-Fi credentials."),
+            ProvisionStatus::Rebooting => ("rebooting", "Saved credentials. Rebooting now..."),
         };
         let payload = format!(
             "{{\"stage\":\"{}\",\"ssid\":\"\",\"attempt\":0,\"total\":5,\"message\":\"{}\"}}",
-            stage,
-            message,
+            stage, message,
         );
         let headers = response_headers("application/json; charset=utf-8", "no-store");
         req.into_response(200, Some("OK"), &headers)?
@@ -1599,8 +1599,13 @@ fn build_dns_reply(query: &[u8], ap_gateway: Ipv4Addr) -> Option<Vec<u8>> {
 // ---------------------------------------------------------------------------
 
 fn parse_form_field(body: &str, key: &str) -> Option<String> {
-    form_urlencoded::parse(body.as_bytes())
-        .find_map(|(k, v)| if k == key { Some(v.into_owned()) } else { None })
+    form_urlencoded::parse(body.as_bytes()).find_map(|(k, v)| {
+        if k == key {
+            Some(v.into_owned())
+        } else {
+            None
+        }
+    })
 }
 
 #[cfg(test)]

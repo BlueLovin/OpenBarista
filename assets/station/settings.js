@@ -7,7 +7,9 @@ const refreshNetworksBtn = document.getElementById("refreshNetworksBtn");
 const deviceLabelInput = document.getElementById("deviceLabelInput");
 const ssidSelect = document.getElementById("ssidSelect");
 const passwordInput = document.getElementById("passwordInput");
-const temperatureOffsetInput = document.getElementById("temperatureOffsetInput");
+const temperatureOffsetInput = document.getElementById(
+  "temperatureOffsetInput",
+);
 const buildIdEl = document.getElementById("buildId");
 const boardIdEl = document.getElementById("boardId");
 const directIpEl = document.getElementById("directIp");
@@ -223,10 +225,12 @@ function buildScaleActionButton(label, action, address = "", disabled = false) {
 }
 
 function scaleConnectBusy(data) {
-  return Boolean(data)
-    && (scaleActionPending
-      || data.state === "connecting"
-      || data.state === "discovering");
+  return (
+    Boolean(data) &&
+    (scaleActionPending ||
+      data.state === "connecting" ||
+      data.state === "discovering")
+  );
 }
 
 function formatScaleMetric(value, unit = "", digits = 1) {
@@ -324,11 +328,7 @@ function renderScaleCurrent(data) {
     actionRow.appendChild(buildScaleActionButton("Cancel", "disconnect"));
   } else if (saved) {
     actionRow.appendChild(
-      buildScaleActionButton(
-        "Connect Saved Scale",
-        "connect",
-        saved.address,
-      ),
+      buildScaleActionButton("Connect Saved Scale", "connect", saved.address),
     );
   }
   if (saved) {
@@ -347,9 +347,10 @@ function renderScaleDevices(data) {
   if (!devices.length) {
     const empty = document.createElement("p");
     empty.className = "scale-empty";
-    empty.textContent = data.state === "scanning"
-      ? "Scanning nearby devices..."
-      : "No scale candidates yet. Tap Find Scales and wake your scale first.";
+    empty.textContent =
+      data.state === "scanning"
+        ? "Scanning nearby devices..."
+        : "No scale candidates yet. Tap Find Scales and wake your scale first.";
     scaleDeviceListEl.appendChild(empty);
     return;
   }
@@ -376,9 +377,10 @@ function renderScaleDevices(data) {
       pill.textContent = "Saved";
       side.appendChild(pill);
     }
-    const isThisDevice = connectBusy
-      && data.connected_address
-      && data.connected_address.toLowerCase() === device.address.toLowerCase();
+    const isThisDevice =
+      connectBusy &&
+      data.connected_address &&
+      data.connected_address.toLowerCase() === device.address.toLowerCase();
     side.appendChild(
       buildScaleActionButton(
         isThisDevice ? "Connecting..." : "Connect",
@@ -401,8 +403,7 @@ function renderScaleState(data) {
     // Only disable the scan button when a POST is in-flight or we're
     // already connected. During connecting/discovering, the user should
     // still be able to start a new scan (which cancels the connect).
-    scanScalesBtn.disabled =
-      scaleActionPending || data.state === "ready";
+    scanScalesBtn.disabled = scaleActionPending || data.state === "ready";
   }
 
   const liveSummary = Boolean(data.connected_name)
@@ -432,18 +433,17 @@ async function loadScaleStatus() {
 async function sendScaleAction(action, address = "") {
   scaleActionPending = true;
   if (scanScalesBtn) scanScalesBtn.disabled = true;
-  document
-    .querySelectorAll("button[data-scale-action]")
-    .forEach((button) => {
-      button.disabled = true;
-    });
+  document.querySelectorAll("button[data-scale-action]").forEach((button) => {
+    button.disabled = true;
+  });
 
-  const busyMessage = {
-    scan: "Finding nearby scales...",
-    connect: "Connecting to the selected scale...",
-    disconnect: "Disconnecting current scale...",
-    forget: "Removing saved scale...",
-  }[action] || "Updating scale...";
+  const busyMessage =
+    {
+      scan: "Finding nearby scales...",
+      connect: "Connecting to the selected scale...",
+      disconnect: "Disconnecting current scale...",
+      forget: "Removing saved scale...",
+    }[action] || "Updating scale...";
 
   setScaleStatus(busyMessage);
 
@@ -467,10 +467,16 @@ async function sendScaleAction(action, address = "") {
     setScaleStatus(payload.message || "Scale updated.");
     await loadScaleStatus();
   } catch (err) {
-    setScaleStatus(`Scale action failed: ${err.message || "unknown error"}`, true);
+    setScaleStatus(
+      `Scale action failed: ${err.message || "unknown error"}`,
+      true,
+    );
   } finally {
     scaleActionPending = false;
     if (scanScalesBtn) scanScalesBtn.disabled = false;
+    document.querySelectorAll("button[data-scale-action]").forEach((button) => {
+      button.disabled = false;
+    });
   }
 }
 
