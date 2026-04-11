@@ -37,7 +37,6 @@ let weights = [];
 let targets = [];
 
 let timerHandle = null;
-let pollHandle = null;
 let consecutiveFailures = 0;
 const HW_FAIL_THRESHOLD = 5;
 let plot = null;
@@ -453,17 +452,23 @@ if (windowSel) {
   });
 }
 
+let pollStopped = false;
+
 function startPolling() {
-  if (pollHandle) return;
-  pollHandle = setInterval(poll, POLL_MS);
-  poll();
+  pollStopped = false;
+  schedulePoll();
 }
 
 function stopPolling() {
-  if (pollHandle) {
-    clearInterval(pollHandle);
-    pollHandle = null;
-  }
+  pollStopped = true;
+}
+
+function schedulePoll() {
+  if (pollStopped) return;
+  setTimeout(async () => {
+    await poll();
+    schedulePoll();
+  }, POLL_MS);
 }
 
 if (hwRetryBtn) {

@@ -144,7 +144,7 @@ mod tests {
     }
 
     #[test]
-    fn poisoned_lock_panics_on_next_use() {
+    fn poisoned_lock_recovers_and_updates() {
         let state = Arc::new(Mutex::new(TelemetrySnapshot {
             seq: 41,
             temperature_c: 95.0,

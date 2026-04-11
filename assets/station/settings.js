@@ -473,10 +473,7 @@ async function sendScaleAction(action, address = "") {
     );
   } finally {
     scaleActionPending = false;
-    if (scanScalesBtn) scanScalesBtn.disabled = false;
-    document.querySelectorAll("button[data-scale-action]").forEach((button) => {
-      button.disabled = false;
-    });
+    await loadScaleStatus();
   }
 }
 

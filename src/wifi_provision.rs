@@ -904,7 +904,9 @@ pub fn start_station_http_server(
 ) -> Result<EspHttpServer<'static>> {
     let saved_scale = read_saved_scale(&nvs_partition)?;
     scale_runtime.apply_saved_scale(saved_scale);
-    let _ = scale_runtime.connect_saved_scale();
+    if let Err(err) = scale_runtime.connect_saved_scale() {
+        println!("[scale] startup connect failed: {err:#}");
+    }
 
     let build_id_value = build_id().to_owned();
     let board_id_value = board_id();
