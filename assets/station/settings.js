@@ -506,12 +506,24 @@ if (scaleDeviceListEl) {
   scaleDeviceListEl.addEventListener("click", onScaleActionClick);
 }
 
+let scaleStatusInFlight = false;
+
+async function pollScaleStatus() {
+  if (scaleStatusInFlight) return;
+  scaleStatusInFlight = true;
+  try {
+    await loadScaleStatus();
+  } finally {
+    scaleStatusInFlight = false;
+  }
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   loadSettings();
-  loadScaleStatus();
+  pollScaleStatus();
 
   if (scalePollHandle) {
     clearInterval(scalePollHandle);
   }
-  scalePollHandle = setInterval(loadScaleStatus, 1000);
+  scalePollHandle = setInterval(pollScaleStatus, 1000);
 });
