@@ -4,6 +4,73 @@
   gap: 8px;
 }
 
+.hw-fail-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: #3a1508;
+  border: 1px solid #7a3010;
+  border-radius: 12px;
+  padding: 10px 14px;
+  margin: 0 0 10px;
+  animation: hw-banner-slide-in 200ms ease;
+}
+
+.hw-fail-banner[hidden] {
+  display: none;
+}
+
+@keyframes hw-banner-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.hw-fail-banner.hw-fail-hard {
+  background: #2a0a04;
+  border-color: #5a1808;
+}
+
+.hw-fail-msg {
+  font-size: 0.78rem;
+  color: #ffb89a;
+  font-weight: 600;
+  flex: 1;
+}
+
+.hw-retry-btn {
+  flex-shrink: 0;
+  border: 1px solid #cc5522;
+  border-radius: 8px;
+  background: transparent;
+  color: #ff9c66;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 5px 11px;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.hw-retry-btn:hover {
+  background: #cc5522;
+  color: #fff;
+}
+
+.hw-retry-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .badge {
   border-radius: 999px;
   padding: 5px 10px;

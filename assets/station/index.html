@@ -13,6 +13,19 @@
     <div class="bg-orb bg-orb-b" aria-hidden="true"></div>
 
     <main class="dashboard-shell">
+      <div
+        id="hwFailBanner"
+        class="hw-fail-banner"
+        hidden
+        aria-live="assertive"
+        role="alert"
+      >
+        <span id="hwFailMsg" class="hw-fail-msg"
+          >Hardware unreachable — check connections.</span
+        >
+        <button id="hwRetryBtn" class="hw-retry-btn">Retry</button>
+      </div>
+
       <header class="topbar">
         <div class="brand-wrap">
           <span class="brand-icon" aria-hidden="true">&#126;</span>

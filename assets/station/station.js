@@ -37,6 +37,9 @@ let weights = [];
 let targets = [];
 
 let timerHandle = null;
+let pollHandle = null;
+let consecutiveFailures = 0;
+const HW_FAIL_THRESHOLD = 5;
 let plot = null;
 
 const $ = (id) => document.getElementById(id);
@@ -57,6 +60,9 @@ const windowSel = $("windowSelect");
 const chartDiv = $("uplotChart");
 const scaleSyncValueEl = $("scaleSyncValue");
 const scaleSyncMetaEl = $("scaleSyncMeta");
+const hwFailBanner = $("hwFailBanner");
+const hwFailMsg = $("hwFailMsg");
+const hwRetryBtn = $("hwRetryBtn");
 
 function buildPlotOpts(width) {
   return {
@@ -70,13 +76,19 @@ function buildPlotOpts(width) {
       flow: {
         range: (_u, min, max) => [
           FLOW_MIN,
-          Math.max(FLOW_FALLBACK_MAX, Math.ceil(Math.max(min ?? 0, max ?? 0) + 1)),
+          Math.max(
+            FLOW_FALLBACK_MAX,
+            Math.ceil(Math.max(min ?? 0, max ?? 0) + 1),
+          ),
         ],
       },
       weight: {
         range: (_u, min, max) => [
           WEIGHT_MIN,
-          Math.max(WEIGHT_FALLBACK_MAX, Math.ceil(Math.max(min ?? 0, max ?? 0) + 2)),
+          Math.max(
+            WEIGHT_FALLBACK_MAX,
+            Math.ceil(Math.max(min ?? 0, max ?? 0) + 2),
+          ),
         ],
       },
     },
@@ -341,7 +353,9 @@ function refreshScaleUi() {
         : "Pair a scale in Settings";
   }
   if (flowEl) {
-    flowEl.textContent = scaleConnected ? `${latestFlowGps.toFixed(1)} g/s` : "--";
+    flowEl.textContent = scaleConnected
+      ? `${latestFlowGps.toFixed(1)} g/s`
+      : "--";
   }
   if (scaleSyncValueEl) {
     scaleSyncValueEl.textContent = scaleConnected ? "Connected" : "Not linked";
@@ -357,6 +371,9 @@ async function poll() {
   try {
     const r = await fetch("/api/telemetry", { cache: "no-store" });
     const d = await r.json();
+
+    consecutiveFailures = 0;
+    if (hwFailBanner) hwFailBanner.hidden = true;
 
     if (d.seq === lastSeq) return;
     lastSeq = d.seq;
@@ -402,6 +419,7 @@ async function poll() {
     refreshPlot();
     if (shotActive) refreshStats();
   } catch (_e) {
+    consecutiveFailures++;
     if (statusEl) {
       statusEl.textContent = "Disconnected";
       statusEl.className = "badge";
@@ -409,6 +427,16 @@ async function poll() {
     scaleConnected = false;
     latestFlowGps = 0;
     refreshScaleUi();
+
+    if (consecutiveFailures >= HW_FAIL_THRESHOLD) {
+      stopPolling();
+      if (hwFailBanner) {
+        if (hwFailMsg) {
+          hwFailMsg.textContent = "Hardware unreachable — check connections.";
+        }
+        hwFailBanner.hidden = false;
+      }
+    }
   }
 }
 
@@ -425,6 +453,31 @@ if (windowSel) {
   });
 }
 
+function startPolling() {
+  if (pollHandle) return;
+  pollHandle = setInterval(poll, POLL_MS);
+  poll();
+}
+
+function stopPolling() {
+  if (pollHandle) {
+    clearInterval(pollHandle);
+    pollHandle = null;
+  }
+}
+
+if (hwRetryBtn) {
+  hwRetryBtn.addEventListener("click", () => {
+    consecutiveFailures = 0;
+    if (hwFailBanner) hwFailBanner.hidden = true;
+    if (statusEl) {
+      statusEl.textContent = "Reconnecting...";
+      statusEl.className = "badge";
+    }
+    startPolling();
+  });
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   if (profileSel) {
     Object.keys(PROFILES).forEach((name, i) => {
@@ -437,6 +490,5 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   setTimeout(bootstrapChartAssets, 50);
-  setInterval(poll, POLL_MS);
-  poll();
+  startPolling();
 });
