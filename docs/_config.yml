@@ -1,7 +1,7 @@
 title: OpenBarista
 description: Open-source ESP32 espresso telemetry firmware — brew temperature, pressure, BLE scale, and a live dashboard on your machine.
-url: ""
-baseurl: ""
+url: "https://bluelovin.github.io"
+baseurl: "/OpenBarista"
 remote_theme: pages-themes/midnight@v0.2.0
 
 plugins:
