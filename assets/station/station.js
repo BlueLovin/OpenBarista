@@ -168,15 +168,17 @@ function buildPlotOpts(width) {
 }
 
 function chartHeightFor(width) {
-  if (width <= 360) return 184;
-  if (width <= 420) return 196;
-  return 250;
+  if (width > 480) return 250;
+  // On mobile, compute from available viewport space
+  const vh = window.innerHeight || 667;
+  // Reserve: topbar ~52, metrics ~68, foot ~50, psi/flow ~52, cta ~48, nav ~44, gaps ~48, padding ~60
+  const reserved = 422;
+  const avail = vh - reserved;
+  return Math.max(120, Math.min(avail, 300));
 }
 
 function chartWidth() {
-  return chartDiv
-    ? chartDiv.clientWidth || chartDiv.offsetWidth || 220
-    : 220;
+  return chartDiv ? chartDiv.clientWidth || chartDiv.offsetWidth || 220 : 220;
 }
 
 function initPlot() {
