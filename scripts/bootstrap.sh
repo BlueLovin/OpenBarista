@@ -41,7 +41,7 @@ require_command git
 require_command python3
 require_command cmake
 
-HOST_TRIPLE="$(rustc -vV | sed -n 's/^host: //p')"
+HOST_TRIPLE="$(rustc +stable -vV | sed -n 's/^host: //p')"
 if [[ -n "${HOST_TRIPLE}" ]]; then
   rustup toolchain install "stable-${HOST_TRIPLE}"
 fi
@@ -56,7 +56,7 @@ espup install \
   --std \
   --export-file "${ESP_ENV_FILE}"
 
-cargo install --locked ldproxy espflash cargo-espflash
+cargo +stable install --locked ldproxy espflash cargo-espflash
 
 cat <<EOF
 
@@ -66,7 +66,8 @@ Open a new shell, or run:
 source "${SHELL_RC}"
 
 Then build and flash with:
-bash "${ROOT_DIR}/scripts/flash.sh"
+source "${ESP_ENV_FILE}"
+cargo run
 
 The ESP environment file for this project is:
 ${ESP_ENV_FILE}
