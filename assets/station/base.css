@@ -157,18 +157,29 @@ body {
   padding: 14px;
 }
 
-@media (max-width: 420px) {
+@media (max-width: 480px) {
   body {
-    padding: 8px;
+    padding: 0;
   }
 
   .dashboard-shell,
   .settings-shell {
     width: 100%;
-    min-height: calc(100dvh - 16px);
+    min-height: 100dvh;
+    gap: 8px;
+    padding: 8px 10px 10px;
+    border-radius: 0;
+    border: none;
+    box-shadow: none;
+  }
+
+  .dashboard-shell {
+    padding-bottom: 52px;
   }
 
   .topbar {
     flex-wrap: wrap;
+    padding: 7px 10px;
+    border-radius: 12px;
   }
 }

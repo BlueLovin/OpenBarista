@@ -66,7 +66,7 @@ const hwRetryBtn = $("hwRetryBtn");
 function buildPlotOpts(width) {
   return {
     width,
-    height: 250,
+    height: chartHeightFor(width),
     cursor: { show: true },
     legend: { live: true },
     scales: {
@@ -167,15 +167,30 @@ function buildPlotOpts(width) {
   };
 }
 
+function chartHeightFor(width) {
+  if (width > 480) return 250;
+  // On mobile, compute from available viewport space
+  const vh = window.innerHeight || 667;
+  // Reserve: topbar ~52, metrics ~68, foot ~50, psi/flow ~52, cta ~48, nav ~44, gaps ~48, padding ~60
+  const reserved = 422;
+  const avail = vh - reserved;
+  return Math.max(120, Math.min(avail, 300));
+}
+
+function chartWidth() {
+  return chartDiv ? chartDiv.clientWidth || chartDiv.offsetWidth || 220 : 220;
+}
+
 function initPlot() {
   if (!chartDiv || typeof uPlot === "undefined") return;
-  const w = Math.max(chartDiv.offsetWidth, 300);
+  const w = chartWidth();
   plot = new uPlot(buildPlotOpts(w), [[], [], [], [], []], chartDiv);
 }
 
 window.addEventListener("resize", () => {
   if (plot && chartDiv) {
-    plot.setSize({ width: Math.max(chartDiv.offsetWidth, 300), height: 250 });
+    const width = chartWidth();
+    plot.setSize({ width, height: chartHeightFor(width) });
   }
 });
 
@@ -346,10 +361,10 @@ function refreshScaleUi() {
   }
   if (weightHintEl) {
     weightHintEl.textContent = shotActive
-      ? "Zeroed when extraction started"
+      ? "Zeroed at shot start"
       : scaleConnected
         ? "Live scale weight"
-        : "Pair a scale in Settings";
+        : "Pair in Settings";
   }
   if (flowEl) {
     flowEl.textContent = scaleConnected
@@ -361,8 +376,8 @@ function refreshScaleUi() {
   }
   if (scaleSyncMetaEl) {
     scaleSyncMetaEl.textContent = scaleConnected
-      ? "Streaming weight and flow"
-      : "Open Settings to pair a scale";
+      ? "Weight and flow live"
+      : "Open Settings to pair";
   }
 }
 

@@ -1,6 +1,8 @@
 .topbar-right {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 8px;
 }
 
@@ -108,6 +110,10 @@
   padding: 12px;
 }
 
+.metric-card-scale {
+  grid-column: auto;
+}
+
 .metric-card-cool {
   background: linear-gradient(160deg, #13212d 0%, #0f1d26 100%);
 }
@@ -146,6 +152,10 @@
   line-height: 1;
   letter-spacing: -0.03em;
   font-variant-numeric: tabular-nums;
+}
+
+.metric-card-scale .metric-value {
+  font-size: clamp(1.9rem, 7vw, 2.7rem);
 }
 
 .metric-unit {
@@ -215,6 +225,10 @@
   background: linear-gradient(90deg, var(--blue), #8cb9ff);
 }
 
+.swatch-weight {
+  background: linear-gradient(90deg, #74e39a, #b9ffc8);
+}
+
 .swatch-target {
   background: repeating-linear-gradient(
     90deg,
@@ -238,10 +252,10 @@
 
 .profile-foot {
   margin-top: 12px;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
-  justify-content: space-between;
-  align-items: flex-end;
+  align-items: end;
 }
 
 .shot-timer {
@@ -260,6 +274,7 @@
 
 .profile-config {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -308,10 +323,8 @@
   font-variant-numeric: tabular-nums;
 }
 
-.status-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+.status-strip {
+  display: block;
 }
 
 .status-card {
@@ -322,6 +335,10 @@
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.status-card-scale {
+  background: linear-gradient(160deg, #121925, #111826);
 }
 
 .status-card p {
@@ -425,43 +442,174 @@
   background: #2a3144;
 }
 
-@media (max-width: 420px) {
+@media (max-width: 480px) {
+  /* ── Top bar ── */
+  .topbar-right {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  /* ── Three-column metric row ── */
   .metric-grid-main {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
   }
 
   .metric-card-scale {
-    grid-column: 1 / -1;
+    grid-column: auto;
   }
 
-  .metric-grid-secondary {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .metric-card {
+    padding: 9px 10px;
+    border-radius: 12px;
+  }
+
+  .metric-label {
+    margin-bottom: 3px;
+    font-size: 0.6rem;
+    letter-spacing: 0.08em;
+  }
+
+  .metric-value {
+    font-size: clamp(1.4rem, 6vw, 1.75rem);
+  }
+
+  .metric-card-scale .metric-value {
+    font-size: clamp(1.4rem, 6vw, 1.75rem);
+  }
+
+  .metric-unit {
+    font-size: 0.65rem;
+  }
+
+  .metric-caption {
+    display: none;
+  }
+
+  /* ── Chart section ── */
+  .profile-card {
+    padding: 8px 10px;
+    border-radius: 14px;
   }
 
   .profile-head {
-    flex-direction: column;
-    align-items: flex-start;
+    margin-bottom: 4px;
+  }
+
+  .profile-head h2 {
+    font-size: 0.76rem;
   }
 
   .chart-legend {
-    justify-content: flex-start;
+    display: none;
   }
 
+  /* Hide uPlot built-in legend on mobile */
+  .u-legend {
+    display: none !important;
+  }
+
+  #uplotChart {
+    min-height: 120px;
+  }
+
+  /* ── Profile foot: timer + controls in one row ── */
   .profile-foot {
-    flex-direction: column;
-    align-items: flex-start;
+    margin-top: 6px;
+    grid-template-columns: auto 1fr;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .shot-timer {
+    font-size: clamp(1.35rem, 5.5vw, 1.6rem);
   }
 
   .profile-config {
-    width: 100%;
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 6px;
+    justify-content: flex-end;
   }
 
-  .profile-config label,
+  .profile-config label {
+    font-size: 0.54rem;
+    gap: 2px;
+  }
+
   .profile-config select {
-    width: 100%;
+    width: 76px;
+    padding: 4px 6px;
+    font-size: 0.66rem;
+    border-radius: 8px;
   }
 
-  .status-grid {
-    grid-template-columns: 1fr;
+  /* ── Secondary metrics: show only PSI + Flow ── */
+  .metric-grid-secondary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .metric-grid-secondary .mini-card:nth-child(n + 3) {
+    display: none;
+  }
+
+  .mini-card {
+    padding: 7px 10px;
+    border-radius: 10px;
+  }
+
+  .mini-card p {
+    margin-bottom: 2px;
+    font-size: 0.6rem;
+  }
+
+  .mini-card strong {
+    font-size: 0.92rem;
+  }
+
+  /* ── Hide scale status strip on mobile ── */
+  .status-strip {
+    display: none;
+  }
+
+  /* ── Compact extraction CTA ── */
+  .cta-wrap {
+    margin: 0;
+  }
+
+  .btn-shot {
+    padding: 13px 10px;
+    font-size: 1.05rem;
+    border-radius: 12px;
+    letter-spacing: 0.06em;
+  }
+
+  /* ── Sticky bottom nav ── */
+  .bottom-nav {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 100;
+    margin: 0;
+    border-radius: 0;
+    padding: 4px 16px;
+    padding-bottom: max(6px, env(safe-area-inset-bottom));
+    gap: 4px;
+    background: #151b27ee;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-top: 1px solid #2a355080;
+  }
+
+  .nav-item {
+    padding: 3px;
+    font-size: 0.54rem;
+    gap: 1px;
+  }
+
+  .nav-icon {
+    font-size: 0.88rem;
   }
 }

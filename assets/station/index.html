@@ -28,7 +28,7 @@
 
       <header class="topbar">
         <div class="brand-wrap">
-          <span class="brand-icon" aria-hidden="true">&#126;</span>
+          <span class="brand-icon" aria-hidden="true">&#9749;</span>
           <h1>OPENBARISTA</h1>
         </div>
         <div class="topbar-right">
@@ -49,6 +49,14 @@
           </p>
         </article>
 
+        <article class="metric-card metric-card-cool">
+          <p class="metric-label">Boiler Temp</p>
+          <p class="metric-value-wrap">
+            <strong id="metricTemp" class="metric-value">--</strong>
+            <span class="metric-unit">C</span>
+          </p>
+        </article>
+
         <article class="metric-card metric-card-scale">
           <p class="metric-label">Extraction Weight</p>
           <p class="metric-value-wrap">
@@ -56,14 +64,6 @@
             <span class="metric-unit">g</span>
           </p>
           <p id="metricWeightHint" class="metric-caption">Live scale weight</p>
-        </article>
-
-        <article class="metric-card metric-card-cool">
-          <p class="metric-label">Boiler Temp</p>
-          <p class="metric-value-wrap">
-            <strong id="metricTemp" class="metric-value">--</strong>
-            <span class="metric-unit">C</span>
-          </p>
         </article>
       </section>
 
@@ -73,6 +73,7 @@
           <p class="chart-legend">
             <span class="swatch swatch-pressure"></span>Pressure
             <span class="swatch swatch-flow"></span>Flow
+            <span class="swatch swatch-weight"></span>Weight
             <span class="swatch swatch-target"></span>Target
           </p>
         </div>
@@ -123,15 +124,8 @@
         </article>
       </section>
 
-      <section class="status-grid" aria-label="Machine status indicators">
-        <article class="status-card">
-          <span class="dot dot-cyan" aria-hidden="true"></span>
-          <div>
-            <p>Filter Quality</p>
-            <strong>98%</strong>
-          </div>
-        </article>
-        <article class="status-card">
+      <section class="status-strip" aria-label="Machine status">
+        <article class="status-card status-card-scale">
           <span class="dot dot-blue" aria-hidden="true"></span>
           <div>
             <p>Scale Sync</p>
