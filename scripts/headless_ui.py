@@ -383,6 +383,8 @@ class HeadlessUiHandler(BaseHTTPRequestHandler):
         path = parsed.path
         state: MockUiState = self.server.state  # type: ignore[attr-defined]
         form = self._read_form()
+        if form is None:
+            return
 
         if path == "/api/settings":
             status, payload = state.update_settings(form)
@@ -398,8 +400,21 @@ class HeadlessUiHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: object) -> None:
         return
 
-    def _read_form(self) -> dict[str, str]:
-        length = int(self.headers.get("Content-Length", "0"))
+    _MAX_BODY_BYTES = 512
+
+    def _read_form(self) -> dict[str, str] | None:
+        raw_cl = self.headers.get("Content-Length", "0")
+        try:
+            length = int(raw_cl)
+        except (ValueError, TypeError):
+            self._send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "message": "Invalid Content-Length."})
+            return None
+        if length < 0 or length > self._MAX_BODY_BYTES:
+            self._send_json(
+                HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                {"ok": False, "message": f"Body too large (max {self._MAX_BODY_BYTES} bytes)."},
+            )
+            return None
         raw_body = self.rfile.read(length).decode("utf-8")
         parsed = parse_qs(raw_body, keep_blank_values=True)
         return {key: values[-1] for key, values in parsed.items()}
