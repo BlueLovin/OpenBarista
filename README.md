@@ -173,10 +173,34 @@ bash scripts/bootstrap.sh
 What bootstrap does:
 
 - Ensures `~/.cargo/bin` is on your PATH
+- Installs the host Rust toolchain `stable-<host-triple>` for desktop tooling
 - Installs `espup` (if missing)
 - Installs Espressif Rust toolchain named `esp`
 - Generates `.esp/export-esp.sh`
 - Installs `ldproxy`, `espflash`, `cargo-espflash`
+
+## Headless UI with Mock Data
+
+You can run the station UI locally without flashing hardware:
+
+```sh
+python3 scripts/headless_ui.py --port 4173
+```
+
+Then open `http://127.0.0.1:4173` or point Playwright at that URL.
+
+What the mock server provides:
+
+- The same station/settings HTML, CSS, and JS from `assets/station/`
+- Mock implementations of `/api/telemetry`, `/api/scale`, `/api/settings`, `/networks`, and `/health`
+- In-memory settings and Bluetooth scale actions so UI flows can be exercised end-to-end
+
+Useful options:
+
+```sh
+python3 scripts/headless_ui.py --host 0.0.0.0 --public-host 127.0.0.1 --port 4173
+python3 scripts/headless_ui.py --build-id local-dev --board-id MOCK-BENCH
+```
 
 ## Build and Flash
 
@@ -202,7 +226,7 @@ Math and telemetry logic include host-runnable tests.
 Example:
 
 ```sh
-cargo test --lib --target x86_64-unknown-linux-gnu
+cargo +stable test --lib --target x86_64-unknown-linux-gnu
 ```
 
 ## Project Layout

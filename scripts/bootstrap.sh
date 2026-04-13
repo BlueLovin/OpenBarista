@@ -36,9 +36,15 @@ mkdir -p "${ESP_ENV_DIR}"
 
 require_command cargo
 require_command rustup
+require_command rustc
 require_command git
 require_command python3
 require_command cmake
+
+HOST_TRIPLE="$(rustc -vV | sed -n 's/^host: //p')"
+if [[ -n "${HOST_TRIPLE}" ]]; then
+  rustup toolchain install "stable-${HOST_TRIPLE}"
+fi
 
 if ! command -v espup >/dev/null 2>&1; then
   cargo +stable install espup --locked
