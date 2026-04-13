@@ -47,7 +47,7 @@ sudo pacman -S git python cmake ninja base-devel openssl
 The easiest way to set everything up is the included bootstrap script:
 
 ```sh
-git clone https://github.com/mrusse/OpenBarista.git
+git clone https://github.com/BlueLovin/OpenBarista.git
 cd OpenBarista
 bash scripts/bootstrap.sh
 ```

@@ -69,4 +69,4 @@ No desktop app or cloud backend is required.
 
 ## License
 
-OpenBarista is open source. See [LICENSE](https://github.com/mrusse/OpenBarista/blob/main/LICENSE) in the repository.
+OpenBarista is open source. See [LICENSE](https://github.com/BlueLovin/OpenBarista/blob/main/LICENSE) in the repository.
