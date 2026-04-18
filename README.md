@@ -162,7 +162,12 @@ Toolchain channel is pinned in `rust-toolchain.toml`:
 
 ## Setup
 
-Install system dependencies first (cmake, python3, git, toolchain prerequisites for ESP-IDF).
+Install system dependencies first (cmake, python3, python3-venv, git, toolchain prerequisites for ESP-IDF).
+
+On Debian/Ubuntu-family systems, `esp-idf-sys` needs the `venv` package for the
+active Python version so it can create the managed ESP-IDF virtualenv. If
+`cargo build` fails with an `ensurepip is not available` error, install
+`python3-venv` (or the versioned package such as `python3.13-venv`).
 
 Then run:
 
@@ -176,8 +181,13 @@ What bootstrap does:
 - Installs the host Rust toolchain `stable-<host-triple>` for desktop tooling
 - Installs `espup` (if missing)
 - Installs Espressif Rust toolchain named `esp`
+- Installs the full Xtensa LLVM/libclang payload needed by `bindgen`
 - Generates `.esp/export-esp.sh`
 - Installs `ldproxy`, `espflash`, `cargo-espflash`
+
+If an older ESP toolchain install fails with a `Unable to find libclang` panic
+from `bindgen`, rerun `bash scripts/bootstrap.sh` to refresh the LLVM install
+and regenerate `.esp/export-esp.sh`.
 
 ## Headless UI with Mock Data
 

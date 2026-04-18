@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -314,6 +315,20 @@ pub struct WifiStack {
     pub ip_addr: String,
     #[cfg(any(esp_idf_comp_mdns_enabled, esp_idf_comp_espressif__mdns_enabled))]
     pub mdns: EspMdns,
+}
+
+struct CaptiveDnsServer {
+    stop: Arc<AtomicBool>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl Drop for CaptiveDnsServer {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
 }
 
 /// Holds all connectivity components that must stay alive for the lifetime
@@ -1503,35 +1518,51 @@ fn create_station_netif() -> Result<EspNetif> {
     Ok(EspNetif::new_with_conf(&sta_netif_conf)?)
 }
 
-fn start_captive_dns(ap_gateway: Ipv4Addr) -> Result<thread::JoinHandle<()>> {
+fn start_captive_dns(ap_gateway: Ipv4Addr) -> Result<CaptiveDnsServer> {
     let socket = UdpSocket::bind((StdIpv4Addr::UNSPECIFIED, 53))
         .map_err(|e| anyhow!("Failed to bind captive DNS on :53: {e}"))?;
     socket
         .set_read_timeout(Some(Duration::from_millis(500)))
         .map_err(|e| anyhow!("Failed to set DNS socket timeout: {e}"))?;
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_for_thread = Arc::clone(&stop);
 
-    let handle = thread::spawn(move || {
-        let mut rx = [0u8; 512];
+    let handle = thread::Builder::new()
+        .name("captive-dns".into())
+        .spawn(move || {
+            let mut rx = [0u8; 512];
 
-        loop {
-            match socket.recv_from(&mut rx) {
-                Ok((len, peer)) => {
-                    if let Some(reply) = build_dns_reply(&rx[..len], ap_gateway) {
-                        if let Err(err) = socket.send_to(&reply, peer) {
-                            println!("[wifi] Captive DNS send error: {err}");
-                        }
-                    }
-                }
-                Err(err) if matches!(err.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
-                Err(err) => {
-                    println!("[wifi] Captive DNS stopped: {err}");
+            loop {
+                if stop_for_thread.load(Ordering::Acquire) {
                     break;
                 }
+                match socket.recv_from(&mut rx) {
+                    Ok((len, peer)) => {
+                        if let Some(reply) = build_dns_reply(&rx[..len], ap_gateway) {
+                            if let Err(err) = socket.send_to(&reply, peer) {
+                                println!("[wifi] Captive DNS send error: {err}");
+                            }
+                        }
+                    }
+                    Err(err)
+                        if matches!(err.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) =>
+                    {
+                        if stop_for_thread.load(Ordering::Acquire) {
+                            break;
+                        }
+                    }
+                    Err(err) => {
+                        println!("[wifi] Captive DNS stopped: {err}");
+                        break;
+                    }
+                }
             }
-        }
-    });
+        })?;
 
-    Ok(handle)
+    Ok(CaptiveDnsServer {
+        stop,
+        handle: Some(handle),
+    })
 }
 
 fn build_dns_reply(query: &[u8], ap_gateway: Ipv4Addr) -> Option<Vec<u8>> {

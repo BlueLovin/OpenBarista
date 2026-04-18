@@ -136,6 +136,7 @@ struct DiscoveredScaleInternal {
 }
 
 struct ActiveScaleConnection {
+    id: u64,
     address_text: String,
     name: String,
     protocol: ScaleProtocol,
@@ -154,6 +155,7 @@ struct ScaleManagerState {
     flow_gps: f32,
     battery_percent: Option<u8>,
     flow_estimator: FlowEstimator,
+    next_connection_id: u64,
 }
 
 impl ScaleManagerState {
@@ -171,6 +173,7 @@ impl ScaleManagerState {
             flow_gps: 0.0,
             battery_percent: None,
             flow_estimator: FlowEstimator::new(),
+            next_connection_id: 1,
         }
     }
 
@@ -229,6 +232,22 @@ impl ScaleManagerState {
         self.battery_percent = None;
         self.flow_estimator.reset();
     }
+
+    fn allocate_connection_id(&mut self) -> u64 {
+        let id = self.next_connection_id;
+        self.next_connection_id = self.next_connection_id.wrapping_add(1);
+        if self.next_connection_id == 0 {
+            self.next_connection_id = 1;
+        }
+        id
+    }
+
+    fn is_active_connection(&self, connection_id: u64) -> bool {
+        self.active
+            .as_ref()
+            .map(|active| active.id == connection_id)
+            .unwrap_or(false)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -236,6 +255,7 @@ impl ScaleManagerState {
 // ---------------------------------------------------------------------------
 
 struct ConnectRequest {
+    connection_id: u64,
     address_text: String,
     addr_type_str: String,
     name: String,
@@ -304,7 +324,7 @@ impl ScaleRuntime {
                 loop {
                     thread::sleep(Duration::from_millis(RECONNECT_POLL_INTERVAL_MS));
                     let request = {
-                        let s = lock_or_recover(&reconn_state);
+                        let mut s = lock_or_recover(&reconn_state);
                         // Only reconnect when idle or in an error state —
                         // never while scanning, connecting, or already
                         // streaming.
@@ -321,47 +341,50 @@ impl ScaleRuntime {
                             continue;
                         }
                         // Must have a saved scale to reconnect to.
-                        let Some(saved) = s.saved_scale.as_ref() else {
+                        let Some(saved) = s.saved_scale.clone() else {
                             continue;
                         };
                         // Don't reconnect if a scale is already active.
                         if s.active.is_some() {
                             continue;
                         }
-                        ConnectRequest {
-                            address_text: saved.address.clone(),
-                            addr_type_str: saved.addr_type.clone(),
-                            name: saved.name.clone(),
-                        }
-                    };
-                    println!(
-                        "[scale] auto-reconnect: trying {}",
-                        display_scale_name(&request.name)
-                    );
-                    // Update UI state so the user sees "Connecting..."
-                    {
-                        let mut s = lock_or_recover(&reconn_state);
+                        let connection_id = s.allocate_connection_id();
+                        let request = ConnectRequest {
+                            connection_id,
+                            address_text: saved.address,
+                            addr_type_str: saved.addr_type,
+                            name: saved.name,
+                        };
                         s.state = ScaleConnectionState::Connecting;
                         s.message = format!(
                             "Auto-connecting to {}...",
                             display_scale_name(&request.name)
                         );
                         s.active = Some(ActiveScaleConnection {
+                            id: request.connection_id,
                             address_text: request.address_text.clone(),
                             name: request.name.clone(),
                             protocol: ScaleProtocol::Unknown,
                         });
                         s.reset_live_values();
-                    }
+                        request
+                    };
+                    println!(
+                        "[scale] auto-reconnect: trying {}",
+                        display_scale_name(&request.name)
+                    );
+                    let connection_id = request.connection_id;
                     if reconn_tx
                         .send(WorkerCommand::ConnectTarget(request))
                         .is_err()
                     {
                         let mut s = lock_or_recover(&reconn_state);
-                        s.state = ScaleConnectionState::Error;
-                        s.message =
-                            "Auto-reconnect failed: BLE worker is unavailable.".to_owned();
-                        s.active = None;
+                        if s.is_active_connection(connection_id) {
+                            s.state = ScaleConnectionState::Error;
+                            s.message =
+                                "Auto-reconnect failed: BLE worker is unavailable.".to_owned();
+                            s.active = None;
+                        }
                         println!("[scale] auto-reconnect: worker channel closed, stopping");
                         break;
                     }
@@ -432,7 +455,7 @@ impl ScaleRuntime {
             state.auto_reconnect_suppressed = false;
         }
 
-        let request = {
+        let mut request = {
             let state = lock_or_recover(&self.state);
             if let Some(active) = state.active.as_ref() {
                 if active.address_text.eq_ignore_ascii_case(address) {
@@ -453,6 +476,7 @@ impl ScaleRuntime {
                 .find(|d| d.address_text.eq_ignore_ascii_case(address))
             {
                 ConnectRequest {
+                    connection_id: 0,
                     address_text: device.address_text.clone(),
                     addr_type_str: device.addr_type_str.clone(),
                     name: device.name.clone(),
@@ -463,6 +487,7 @@ impl ScaleRuntime {
                 .filter(|s| s.address.eq_ignore_ascii_case(address))
             {
                 ConnectRequest {
+                    connection_id: 0,
                     address_text: saved.address.clone(),
                     addr_type_str: saved.addr_type.clone(),
                     name: saved.name.clone(),
@@ -476,9 +501,12 @@ impl ScaleRuntime {
 
         {
             let mut state = lock_or_recover(&self.state);
+            let connection_id = state.allocate_connection_id();
+            request.connection_id = connection_id;
             state.state = ScaleConnectionState::Connecting;
             state.message = format!("Connecting to {}...", display_scale_name(&request.name));
             state.active = Some(ActiveScaleConnection {
+                id: connection_id,
                 address_text: request.address_text.clone(),
                 name: request.name.clone(),
                 protocol: ScaleProtocol::Unknown,
@@ -693,6 +721,17 @@ fn worker_loop(
                 }
 
                 WorkerCommand::ConnectTarget(req) => {
+                    {
+                        let s = lock_or_recover(&state);
+                        if !s.is_active_connection(req.connection_id) {
+                            println!(
+                                "[scale] ignoring stale connect request for {}",
+                                display_scale_name(&req.name)
+                            );
+                            continue;
+                        }
+                    }
+
                     // Properly disconnect & drop any existing client.
                     if let Some(mut old_client) = active_client.take() {
                         println!("[scale] dropping previous client");
@@ -811,7 +850,7 @@ fn worker_loop(
                         // Check if user cancelled between retries
                         {
                             let s = lock_or_recover(&state);
-                            if s.active.is_none() {
+                            if !s.is_active_connection(req.connection_id) {
                                 println!(
                                     "[scale] connect cancelled by user before attempt {attempt}"
                                 );
@@ -861,7 +900,7 @@ fn worker_loop(
                             Some(Err(e)) => {
                                 cancel_gap_operations();
                                 let s = lock_or_recover(&state);
-                                if s.active.is_none() {
+                                if !s.is_active_connection(req.connection_id) {
                                     println!("[scale] connect cancelled (err={:?})", e);
                                     break;
                                 }
@@ -874,19 +913,21 @@ fn worker_loop(
                                 } else {
                                     println!("[scale] connect failed after {CONNECT_MAX_ATTEMPTS} attempts: {:?}", e);
                                     let mut s = lock_or_recover(&state);
-                                    s.state = ScaleConnectionState::Error;
-                                    s.message = format!(
-                                        "Could not connect to {} after {CONNECT_MAX_ATTEMPTS} attempts. Make sure the scale is on and nearby.",
-                                        display_scale_name(&req.name)
-                                    );
-                                    s.active = None;
-                                    telemetry.clear_scale();
+                                    if s.is_active_connection(req.connection_id) {
+                                        s.state = ScaleConnectionState::Error;
+                                        s.message = format!(
+                                            "Could not connect to {} after {CONNECT_MAX_ATTEMPTS} attempts. Make sure the scale is on and nearby.",
+                                            display_scale_name(&req.name)
+                                        );
+                                        s.active = None;
+                                        telemetry.clear_scale();
+                                    }
                                 }
                             }
                             None => {
                                 cancel_gap_operations();
                                 let s = lock_or_recover(&state);
-                                if s.active.is_none() {
+                                if !s.is_active_connection(req.connection_id) {
                                     println!("[scale] connect cancelled during watchdog abort");
                                     break;
                                 }
@@ -898,13 +939,15 @@ fn worker_loop(
                                 } else {
                                     println!("[scale] connect timed out after {CONNECT_MAX_ATTEMPTS} attempts");
                                     let mut s = lock_or_recover(&state);
-                                    s.state = ScaleConnectionState::Error;
-                                    s.message = format!(
-                                        "Connection to {} timed out after {CONNECT_MAX_ATTEMPTS} attempts. Make sure the scale is on and nearby.",
-                                        display_scale_name(&req.name)
-                                    );
-                                    s.active = None;
-                                    telemetry.clear_scale();
+                                    if s.is_active_connection(req.connection_id) {
+                                        s.state = ScaleConnectionState::Error;
+                                        s.message = format!(
+                                            "Connection to {} timed out after {CONNECT_MAX_ATTEMPTS} attempts. Make sure the scale is on and nearby.",
+                                            display_scale_name(&req.name)
+                                        );
+                                        s.active = None;
+                                        telemetry.clear_scale();
+                                    }
                                 }
                             }
                         }
@@ -921,7 +964,7 @@ fn worker_loop(
                         // Check if the connect was cancelled while we waited
                         {
                             let s = lock_or_recover(&state);
-                            if s.active.is_none() {
+                            if !s.is_active_connection(req.connection_id) {
                                 println!("[scale] connect succeeded but was cancelled, dropping");
                                 let _ = client.disconnect();
                                 continue;
@@ -934,12 +977,20 @@ fn worker_loop(
                         let disc_state = state.clone();
                         let disc_telemetry = telemetry.clone();
                         let disc_name = req.name.clone();
+                        let disc_connection_id = req.connection_id;
                         client.on_disconnect(move |reason| {
+                            let mut s = lock_or_recover(&disc_state);
+                            if !s.is_active_connection(disc_connection_id) {
+                                println!(
+                                    "[scale] ignoring stale disconnect from {} (reason={reason})",
+                                    display_scale_name(&disc_name)
+                                );
+                                return;
+                            }
                             println!(
                                 "[scale] disconnected from {} (reason={reason})",
                                 display_scale_name(&disc_name)
                             );
-                            let mut s = lock_or_recover(&disc_state);
                             s.active = None;
                             s.state = ScaleConnectionState::Idle;
                             s.message =
@@ -959,12 +1010,26 @@ fn worker_loop(
                             );
                         }
 
-                        match discover_and_subscribe(&mut client, &req.name, &state, &telemetry)
-                            .await
+                        match discover_and_subscribe(
+                            &mut client,
+                            req.connection_id,
+                            &req.name,
+                            &state,
+                            &telemetry,
+                        )
+                        .await
                         {
                             Ok(protocol) => {
                                 {
                                     let mut s = lock_or_recover(&state);
+                                    if !s.is_active_connection(req.connection_id) {
+                                        println!(
+                                            "[scale] discovery completed for stale connection, dropping"
+                                        );
+                                        drop(s);
+                                        let _ = client.disconnect();
+                                        continue;
+                                    }
                                     if let Some(active) = s.active.as_mut() {
                                         active.protocol = protocol;
                                     }
@@ -976,7 +1041,7 @@ fn worker_loop(
                                 telemetry.update_scale(true, 0.0, 0.0);
 
                                 // Read battery if available
-                                read_battery(&mut client, &state).await;
+                                read_battery(&mut client, req.connection_id, &state).await;
 
                                 println!(
                                     "[scale] ready — streaming from {}",
@@ -988,13 +1053,15 @@ fn worker_loop(
                                 println!("[scale] discovery failed: {e}");
                                 let _ = client.disconnect();
                                 let mut s = lock_or_recover(&state);
-                                s.state = ScaleConnectionState::Error;
-                                s.message = format!(
-                                    "Connected to {} but could not find a weight channel: {e}",
-                                    display_scale_name(&req.name)
-                                );
-                                s.active = None;
-                                telemetry.clear_scale();
+                                if s.is_active_connection(req.connection_id) {
+                                    s.state = ScaleConnectionState::Error;
+                                    s.message = format!(
+                                        "Connected to {} but could not find a weight channel: {e}",
+                                        display_scale_name(&req.name)
+                                    );
+                                    s.active = None;
+                                    telemetry.clear_scale();
+                                }
                             }
                         }
                     }
@@ -1026,6 +1093,7 @@ fn worker_loop(
 
 async fn discover_and_subscribe(
     client: &mut esp32_nimble::BLEClient,
+    connection_id: u64,
     scale_name: &str,
     state: &Arc<Mutex<ScaleManagerState>>,
     telemetry: &SharedTelemetry,
@@ -1056,6 +1124,7 @@ async fn discover_and_subscribe(
                         "0x{:04X} on service 0x{:04X}",
                         UUID_CHARACTERISTIC_WEIGHT_MEASUREMENT, UUID_SERVICE_WEIGHT_SCALE
                     ),
+                    connection_id,
                     state,
                     telemetry,
                 )
@@ -1085,6 +1154,7 @@ async fn discover_and_subscribe(
                         characteristic,
                         ScaleProtocol::GenericNotify,
                         channel_label,
+                        connection_id,
                         state,
                         telemetry,
                     )
@@ -1136,6 +1206,7 @@ async fn discover_and_subscribe(
                             characteristic,
                             proto,
                             channel_label,
+                            connection_id,
                             state,
                             telemetry,
                         )
@@ -1165,6 +1236,7 @@ async fn discover_and_subscribe(
                             characteristic,
                             ScaleProtocol::GenericNotify,
                             channel_label,
+                            connection_id,
                             state,
                             telemetry,
                         )
@@ -1208,6 +1280,7 @@ async fn discover_and_subscribe(
                                 characteristic,
                                 ScaleProtocol::GenericNotify,
                                 channel_label,
+                                connection_id,
                                 state,
                                 telemetry,
                             )
@@ -1231,6 +1304,7 @@ async fn subscribe_weight_notifications(
     characteristic: &mut esp32_nimble::BLERemoteCharacteristic,
     protocol: ScaleProtocol,
     channel_label: String,
+    connection_id: u64,
     state: &Arc<Mutex<ScaleManagerState>>,
     telemetry: &SharedTelemetry,
 ) -> Result<()> {
@@ -1240,9 +1314,15 @@ async fn subscribe_weight_notifications(
     let mut debug_remaining: u8 = 8;
 
     characteristic.on_notify(move |data| {
-        let (previous_weight_g, should_log) = {
+        let Some((previous_weight_g, should_log)) = ({
             let s = lock_or_recover(&notify_state);
-            (s.weight_g, debug_remaining > 0)
+            if !s.is_active_connection(connection_id) {
+                None
+            } else {
+                Some((s.weight_g, debug_remaining > 0))
+            }
+        }) else {
+            return;
         };
 
         if should_log {
@@ -1263,7 +1343,7 @@ async fn subscribe_weight_notifications(
                     weight_g, previous_weight_g
                 );
             }
-            apply_weight_measurement(&notify_state, &notify_telemetry, weight_g);
+            apply_weight_measurement(&notify_state, &notify_telemetry, connection_id, weight_g);
         }
     });
 
@@ -1296,7 +1376,7 @@ async fn subscribe_weight_notifications(
                 if let Some(weight_g) =
                     parse_weight_measurement(protocol, &value, previous_weight_g)
                 {
-                    apply_weight_measurement(state, telemetry, weight_g);
+                    apply_weight_measurement(state, telemetry, connection_id, weight_g);
                 }
             }
         }
@@ -1308,9 +1388,13 @@ async fn subscribe_weight_notifications(
 fn apply_weight_measurement(
     state: &Arc<Mutex<ScaleManagerState>>,
     telemetry: &SharedTelemetry,
+    connection_id: u64,
     weight_g: f32,
 ) {
     let mut s = lock_or_recover(state);
+    if !s.is_active_connection(connection_id) {
+        return;
+    }
     let flow_gps = s.flow_estimator.observe(weight_g, unix_time_ms());
     s.weight_g = weight_g;
     s.flow_gps = flow_gps;
@@ -1318,7 +1402,11 @@ fn apply_weight_measurement(
     telemetry.update_scale(true, weight_g, flow_gps);
 }
 
-async fn read_battery(client: &mut esp32_nimble::BLEClient, state: &Arc<Mutex<ScaleManagerState>>) {
+async fn read_battery(
+    client: &mut esp32_nimble::BLEClient,
+    connection_id: u64,
+    state: &Arc<Mutex<ScaleManagerState>>,
+) {
     let service = match client
         .get_service(BleUuid::from_uuid16(UUID_SERVICE_BATTERY))
         .await
@@ -1336,7 +1424,10 @@ async fn read_battery(client: &mut esp32_nimble::BLEClient, state: &Arc<Mutex<Sc
     if let Ok(value) = characteristic.read_value().await {
         if let Some(&level) = value.first() {
             println!("[scale] battery={}%", level);
-            lock_or_recover(state).battery_percent = Some(level);
+            let mut s = lock_or_recover(state);
+            if s.is_active_connection(connection_id) {
+                s.battery_percent = Some(level);
+            }
         }
     }
 }
