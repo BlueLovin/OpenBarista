@@ -359,8 +359,7 @@ impl ScaleRuntime {
                     {
                         let mut s = lock_or_recover(&reconn_state);
                         s.state = ScaleConnectionState::Error;
-                        s.message =
-                            "Auto-reconnect failed: BLE worker is unavailable.".to_owned();
+                        s.message = "Auto-reconnect failed: BLE worker is unavailable.".to_owned();
                         s.active = None;
                         println!("[scale] auto-reconnect: worker channel closed, stopping");
                         break;
