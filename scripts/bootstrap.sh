@@ -30,6 +30,31 @@ require_command() {
   fi
 }
 
+install_system_deps() {
+  if command -v dnf >/dev/null 2>&1; then
+    echo "Detected Fedora/RPM system. Installing system dependencies via dnf..."
+    sudo dnf install -y \
+      cmake python3 git gcc gcc-c++ \
+      openssl-devel libudev-devel ninja-build dfu-util \
+      perl-FindBin
+  elif command -v apt-get >/dev/null 2>&1; then
+    echo "Detected Debian/Ubuntu system. Installing system dependencies via apt..."
+    sudo apt-get update -qq
+    sudo apt-get install -y \
+      cmake python3 python3-venv git build-essential \
+      libssl-dev libudev-dev ninja-build dfu-util
+  else
+    echo "Unsupported package manager. Install cmake, python3, git, and build tools manually." >&2
+    exit 1
+  fi
+}
+
+install_rustup() {
+  echo "rustup not found. Installing via rustup-init..."
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
+  export PATH="${HOME}/.cargo/bin:${PATH}"
+}
+
 require_python_venv() {
   local tmpdir
   tmpdir="$(mktemp -d)"
@@ -37,11 +62,15 @@ require_python_venv() {
   if ! python3 -m venv "${tmpdir}/probe" >/dev/null 2>&1; then
     rm -rf "${tmpdir}"
     echo "python3 can run, but python3 -m venv is not available." >&2
-    echo "Install your distro's venv package before building ESP-IDF projects." >&2
-    echo "On Debian/Ubuntu, use: sudo apt install python3-venv" >&2
-    echo "If your distro splits it by Python version, install the matching package" >&2
-    echo "(for example: python3.13-venv)." >&2
-    exit 1
+    if command -v apt-get >/dev/null 2>&1; then
+      local pyver
+      pyver="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+      echo "Installing python${pyver}-venv..."
+      sudo apt-get install -y "python${pyver}-venv"
+    else
+      echo "Install your distro's python3-venv package and rerun this script." >&2
+      exit 1
+    fi
   fi
 
   rm -rf "${tmpdir}"
@@ -86,9 +115,14 @@ ensure_path_line
 
 mkdir -p "${ESP_ENV_DIR}"
 
-require_command cargo
-require_command rustup
-require_command rustc
+install_system_deps
+
+if ! command -v rustup >/dev/null 2>&1; then
+  install_rustup
+fi
+
+ensure_path_line
+
 require_command git
 require_command python3
 require_command cmake
@@ -103,12 +137,19 @@ if ! command -v espup >/dev/null 2>&1; then
   cargo +stable install espup --locked
 fi
 
-espup install \
-  --name esp \
-  --targets esp32 \
-  --extended-llvm \
-  --std \
-  --export-file "${ESP_ENV_FILE}"
+espup_args=(
+  install
+  --name
+  esp
+  --targets
+  esp32
+  --extended-llvm
+  --std
+  --export-file
+  "${ESP_ENV_FILE}"
+)
+
+espup "${espup_args[@]}"
 
 require_generated_libclang
 

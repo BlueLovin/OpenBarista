@@ -162,7 +162,26 @@ Toolchain channel is pinned in `rust-toolchain.toml`:
 
 ## Setup
 
-Install system dependencies first (cmake, python3, python3-venv, git, toolchain prerequisites for ESP-IDF).
+Install system dependencies before running the bootstrap script.
+
+### Fedora
+
+```sh
+sudo dnf install -y cmake python3 git gcc g++ \
+  openssl-devel libudev-devel ninja-build dfu-util
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+```
+
+### Debian / Ubuntu
+
+```sh
+sudo apt update && sudo apt install -y \
+  cmake python3 python3-venv git build-essential \
+  libssl-dev libudev-dev ninja-build dfu-util
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+```
 
 On Debian/Ubuntu-family systems, `esp-idf-sys` needs the `venv` package for the
 active Python version so it can create the managed ESP-IDF virtualenv. If
