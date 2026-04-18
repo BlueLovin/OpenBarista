@@ -24,9 +24,9 @@ use openbarista::telemetry_math::{sanitize_weight_g, FlowEstimator};
 const SCALE_SCAN_DURATION_S: u32 = 6;
 const CONNECT_TIMEOUT_MS: u32 = 2_000;
 const CONNECT_MAX_ATTEMPTS: u32 = 10;
-const RECONNECT_POLL_INTERVAL_MS: u64 = 5_000;
+const RECONNECT_POLL_INTERVAL_MS: u64 = 15_000;
 const MAX_DISCOVERED_SCALES: usize = 18;
-const SCALE_READY_MESSAGE: &str = "Bluetooth scale ready. Tap Find Scales to pair.";
+const SCALE_READY_MESSAGE: &str = "Bluetooth scale idle.";
 const SCALE_STARTUP_MESSAGE: &str = "Starting Bluetooth scale transport...";
 
 const UUID_SERVICE_WEIGHT_SCALE: u16 = 0x181D;
@@ -357,7 +357,7 @@ impl ScaleRuntime {
                         };
                         s.state = ScaleConnectionState::Connecting;
                         s.message = format!(
-                            "Auto-connecting to {}...",
+                            "Reconnecting to {} in the background...",
                             display_scale_name(&request.name)
                         );
                         s.active = Some(ActiveScaleConnection {
@@ -380,9 +380,8 @@ impl ScaleRuntime {
                     {
                         let mut s = lock_or_recover(&reconn_state);
                         if s.is_active_connection(connection_id) {
-                            s.state = ScaleConnectionState::Error;
-                            s.message =
-                                "Auto-reconnect failed: BLE worker is unavailable.".to_owned();
+                            s.state = ScaleConnectionState::Idle;
+                            s.message = "Bluetooth scale idle.".to_owned();
                             s.active = None;
                         }
                         println!("[scale] auto-reconnect: worker channel closed, stopping");
@@ -868,7 +867,7 @@ fn worker_loop(
                             {
                                 let mut s = lock_or_recover(&state);
                                 s.message = format!(
-                                    "Attempting to pair to {}...",
+                                    "Retrying connection to {}...",
                                     display_scale_name(&req.name)
                                 );
                             }
@@ -899,6 +898,9 @@ fn worker_loop(
                             }
                             Some(Err(e)) => {
                                 cancel_gap_operations();
+                                // Clean up any partial GAP link so NimBLE
+                                // resources are released before retrying.
+                                let _ = client.disconnect();
                                 let s = lock_or_recover(&state);
                                 if !s.is_active_connection(req.connection_id) {
                                     println!("[scale] connect cancelled (err={:?})", e);
@@ -914,9 +916,9 @@ fn worker_loop(
                                     println!("[scale] connect failed after {CONNECT_MAX_ATTEMPTS} attempts: {:?}", e);
                                     let mut s = lock_or_recover(&state);
                                     if s.is_active_connection(req.connection_id) {
-                                        s.state = ScaleConnectionState::Error;
+                                        s.state = ScaleConnectionState::Idle;
                                         s.message = format!(
-                                            "Could not connect to {} after {CONNECT_MAX_ATTEMPTS} attempts. Make sure the scale is on and nearby.",
+                                            "Could not reach {}. It may be off or out of range.",
                                             display_scale_name(&req.name)
                                         );
                                         s.active = None;
@@ -926,6 +928,16 @@ fn worker_loop(
                             }
                             None => {
                                 cancel_gap_operations();
+                                // The connect() future was dropped mid-flight
+                                // by select().  The BLEClient's internal
+                                // Signal is now stale (set by the GAP cancel
+                                // event but never consumed).  Any subsequent
+                                // connect() on the same client returns
+                                // instantly because .await sees the already-
+                                // signaled Signal.  The only remedy is a
+                                // fresh client.
+                                let _ = client.disconnect();
+                                client = ble_device.new_client();
                                 let s = lock_or_recover(&state);
                                 if !s.is_active_connection(req.connection_id) {
                                     println!("[scale] connect cancelled during watchdog abort");
@@ -940,9 +952,9 @@ fn worker_loop(
                                     println!("[scale] connect timed out after {CONNECT_MAX_ATTEMPTS} attempts");
                                     let mut s = lock_or_recover(&state);
                                     if s.is_active_connection(req.connection_id) {
-                                        s.state = ScaleConnectionState::Error;
+                                        s.state = ScaleConnectionState::Idle;
                                         s.message = format!(
-                                            "Connection to {} timed out after {CONNECT_MAX_ATTEMPTS} attempts. Make sure the scale is on and nearby.",
+                                            "Could not reach {}. It may be off or out of range.",
                                             display_scale_name(&req.name)
                                         );
                                         s.active = None;
@@ -960,6 +972,13 @@ fn worker_loop(
                     }
 
                     // --- Post-connect: service discovery (only if connected) ---
+                    if !connected {
+                        // Ensure the client's NimBLE resources are released
+                        // even though no connection was established.  drop()
+                        // alone only clears the GAP callback and can leak
+                        // GATTC / connection slots after repeated cycles.
+                        let _ = client.disconnect();
+                    }
                     if connected {
                         // Check if the connect was cancelled while we waited
                         {
