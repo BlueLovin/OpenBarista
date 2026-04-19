@@ -777,8 +777,6 @@ fn worker_loop(
                     let wd_quit2 = wd_quit.clone();
                     let wd_exited = Arc::new(AtomicBool::new(false));
                     let wd_exited2 = wd_exited.clone();
-                    let wd_addr_text = req.address_text.clone();
-                    let wd_addr_type_str = addr_type_str.clone();
                     let _wd_handle = thread::Builder::new()
                         .name("ble-wd".into())
                         .stack_size(4096)
@@ -814,31 +812,17 @@ fn worker_loop(
                                         "[scale] WATCHDOG: connect timed out after {}ms",
                                         CONNECT_TIMEOUT_MS
                                     );
+                                    // Only cancel the pending GAP connect.
+                                    // Do NOT terminate established connections
+                                    // by conn_handle here — that bypasses
+                                    // BLEClient's internal state tracking and
+                                    // corrupts NimBLE's GATT layer, causing
+                                    // phantom connections on subsequent
+                                    // retries.  The retry loop calls
+                                    // client.disconnect() which is the correct
+                                    // cleanup path.
                                     unsafe {
                                         esp_idf_svc::sys::ble_gap_conn_cancel();
-                                        if let Some(a) = BLEAddress::from_str(
-                                            &wd_addr_text,
-                                            parse_nimble_addr_type(&wd_addr_type_str),
-                                        ) {
-                                            let ble_addr: esp_idf_svc::sys::ble_addr_t = a.into();
-                                            let mut desc: esp_idf_svc::sys::ble_gap_conn_desc =
-                                                core::mem::zeroed();
-                                            if esp_idf_svc::sys::ble_gap_conn_find_by_addr(
-                                                &ble_addr,
-                                                &mut desc,
-                                            ) == 0
-                                            {
-                                                println!(
-                                                    "[scale] WATCHDOG: terminating conn_handle={}",
-                                                    desc.conn_handle
-                                                );
-                                                esp_idf_svc::sys::ble_gap_terminate(
-                                                    desc.conn_handle,
-                                                    esp_idf_svc::sys::ble_error_codes_BLE_ERR_REM_USER_CONN_TERM
-                                                        as _,
-                                                );
-                                            }
-                                        }
                                     }
                                     wd_abort.signal(());
                                 }
@@ -900,7 +884,13 @@ fn worker_loop(
                                 cancel_gap_operations();
                                 // Clean up any partial GAP link so NimBLE
                                 // resources are released before retrying.
+                                // The client's internal state may be stale
+                                // (e.g. watchdog interference set the GAP
+                                // callback result but the Signal was already
+                                // consumed), so always create a fresh one —
+                                // same reasoning as the None/abort path.
                                 let _ = client.disconnect();
+                                client = ble_device.new_client();
                                 let s = lock_or_recover(&state);
                                 if !s.is_active_connection(req.connection_id) {
                                     println!("[scale] connect cancelled (err={:?})", e);
@@ -978,6 +968,9 @@ fn worker_loop(
                         // alone only clears the GAP callback and can leak
                         // GATTC / connection slots after repeated cycles.
                         let _ = client.disconnect();
+                        cancel_gap_operations();
+                        // Let NimBLE fully settle before the next cycle.
+                        thread::sleep(Duration::from_millis(200));
                     }
                     if connected {
                         // Check if the connect was cancelled while we waited
