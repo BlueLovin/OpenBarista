@@ -3,8 +3,8 @@
 //! Every raw `unsafe` interaction with `esp_idf_svc::sys` lives here so the
 //! rest of the crate stays safe.
 
-use esp32_nimble::{BLEAddress, BLEAddressType};
-use log::{debug, info, warn};
+use esp32_nimble::BLEAddressType;
+use log::{debug, info};
 
 // ---------------------------------------------------------------------------
 // Address helpers
@@ -78,65 +78,6 @@ pub fn cancel_all_gap_operations() {
         }
         if esp_idf_svc::sys::ble_gap_conn_cancel() == 0 {
             info!("cancelled stale connect");
-        }
-    }
-}
-
-/// Terminate any lingering GAP connection to `addr_text` and wait for NimBLE
-/// to fully remove it from the connection table. This prevents stale
-/// connection-handle entries from corrupting the next connect attempt.
-pub fn terminate_stale_connection(addr_text: &str, addr_type_str: &str) {
-    let addr_type = parse_addr_type(addr_type_str);
-    let Some(addr) = BLEAddress::from_str(addr_text, addr_type) else {
-        return;
-    };
-    unsafe {
-        let ble_addr: esp_idf_svc::sys::ble_addr_t = addr.into();
-        let mut desc: esp_idf_svc::sys::ble_gap_conn_desc = core::mem::zeroed();
-        if esp_idf_svc::sys::ble_gap_conn_find_by_addr(&ble_addr, &mut desc) != 0 {
-            return; // No stale connection found.
-        }
-        info!(
-            "cleanup: found stale conn_handle={} to {addr_text}, terminating",
-            desc.conn_handle,
-        );
-        esp_idf_svc::sys::ble_gap_terminate(
-            desc.conn_handle,
-            esp_idf_svc::sys::ble_error_codes_BLE_ERR_REM_USER_CONN_TERM as _,
-        );
-        // Poll until NimBLE removes the entry (up to ~1 s).
-        for _ in 0..20 {
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            if esp_idf_svc::sys::ble_gap_conn_find_by_addr(&ble_addr, &mut desc) != 0 {
-                debug!("cleanup: stale connection cleared");
-                return;
-            }
-        }
-        warn!("cleanup: stale connection may not have fully cleared");
-    }
-}
-
-/// Forcibly terminate a connection to the given address if one exists.
-/// Used by the connect watchdog when a timeout fires.
-pub fn force_terminate_connection(addr_text: &str, addr_type_str: &str) {
-    unsafe {
-        esp_idf_svc::sys::ble_gap_conn_cancel();
-    }
-    let addr_type = parse_addr_type(addr_type_str);
-    if let Some(addr) = BLEAddress::from_str(addr_text, addr_type) {
-        unsafe {
-            let ble_addr: esp_idf_svc::sys::ble_addr_t = addr.into();
-            let mut desc: esp_idf_svc::sys::ble_gap_conn_desc = core::mem::zeroed();
-            if esp_idf_svc::sys::ble_gap_conn_find_by_addr(&ble_addr, &mut desc) == 0 {
-                info!(
-                    "watchdog: terminating conn_handle={}",
-                    desc.conn_handle,
-                );
-                esp_idf_svc::sys::ble_gap_terminate(
-                    desc.conn_handle,
-                    esp_idf_svc::sys::ble_error_codes_BLE_ERR_REM_USER_CONN_TERM as _,
-                );
-            }
         }
     }
 }

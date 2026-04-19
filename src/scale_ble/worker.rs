@@ -3,6 +3,7 @@
 //! The worker owns the `BLEClient` (which is `!Send`) and processes commands
 //! from the public API and the reconnect thread via an `mpsc` channel.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -235,16 +236,80 @@ async fn handle_connect(
         req.addr_type_str,
     );
 
+    // --- Pre-connect scan: verify the device is actually advertising before
+    //     committing to the retry loop.  Without this, a powered-off scale
+    //     triggers ~20 connect→cancel cycles (~90 s) where each
+    //     ble_gap_conn_cancel() dirties NimBLE's internal state, making
+    //     subsequent attempts *less* likely to succeed.  A quick passive scan
+    //     avoids all of that: if the device isn't advertising we bail
+    //     instantly and let the auto-reconnect thread try again later.  When
+    //     the device IS found the controller's radio is warmed up and
+    //     connection succeeds much faster. ---
+    {
+        let prescan_found = Arc::new(AtomicBool::new(false));
+        let prescan_found2 = prescan_found.clone();
+        let prescan_target = req.address_text.clone();
+
+        {
+            let mut s = lock_or_recover(state);
+            if s.is_active_connection(req.connection_id) {
+                s.message = format!("Searching for {}...", display_scale_name(&req.name));
+            }
+        }
+
+        let mut prescan = BLEScan::new();
+        prescan
+            .active_scan(false)
+            .filter_duplicates(true)
+            .interval(100)
+            .window(99);
+
+        info!("pre-connect scan for {}", req.address_text);
+        let _ = prescan
+            .start(ble_device, 3000, move |device, _data| {
+                let ad = format!("{}", device.addr());
+                if ad.eq_ignore_ascii_case(&prescan_target) {
+                    prescan_found2.store(true, Ordering::Release);
+                    return Some(()); // stop scan early
+                }
+                None::<()>
+            })
+            .await;
+
+        nimble::cancel_all_gap_operations();
+
+        if !prescan_found.load(Ordering::Acquire) {
+            info!(
+                "pre-connect scan: {} not advertising, skipping connect",
+                req.address_text
+            );
+            let mut s = lock_or_recover(state);
+            if s.is_active_connection(req.connection_id) {
+                s.state = ScaleConnectionState::Idle;
+                s.message = format!(
+                    "{} not found nearby. Will retry automatically.",
+                    display_scale_name(&req.name)
+                );
+                s.active = None;
+            }
+            return;
+        }
+        info!("pre-connect scan: found {}", req.address_text);
+
+        {
+            let mut s = lock_or_recover(state);
+            if s.is_active_connection(req.connection_id) {
+                s.message = format!("Connecting to {}...", display_scale_name(&req.name));
+            }
+        }
+    }
+
     // Single client reused across retry attempts.
     let mut client = ble_device.new_client();
     let mut connected = false;
 
     // Persistent watchdog (channel-based, no spin-polling).
-    let wd = watchdog::spawn(
-        req.address_text.clone(),
-        req.addr_type_str.clone(),
-        CONNECT_TIMEOUT_MS,
-    );
+    let wd = watchdog::spawn(CONNECT_TIMEOUT_MS);
 
     for attempt in 1..=CONNECT_MAX_ATTEMPTS {
         // Check for user cancellation between retries.
@@ -259,7 +324,9 @@ async fn handle_connect(
         if attempt > 1 {
             info!("retrying connect (attempt {attempt}/{CONNECT_MAX_ATTEMPTS})");
             nimble::cancel_all_gap_operations();
-            nimble::terminate_stale_connection(&req.address_text, &req.addr_type_str);
+            // Real delay to let the NimBLE controller fully process the
+            // previous cancellation.  yield_now() is a no-op under
+            // block_on's single-task executor.
             thread::sleep(Duration::from_millis(500));
             {
                 let mut s = lock_or_recover(state);
@@ -330,8 +397,14 @@ async fn handle_connect(
     drop(wd);
 
     if !connected {
+        // Ensure the client's NimBLE resources are released even though no
+        // connection was established.  drop() alone only clears the GAP
+        // callback and can leak GATTC / connection slots after repeated
+        // cycles.
         let _ = client.disconnect();
-        nimble::terminate_stale_connection(&req.address_text, &req.addr_type_str);
+        nimble::cancel_all_gap_operations();
+        // Let NimBLE fully settle before the next cycle.
+        thread::sleep(Duration::from_millis(200));
         return;
     }
 

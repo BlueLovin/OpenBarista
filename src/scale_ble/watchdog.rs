@@ -60,8 +60,6 @@ impl Drop for WatchdogHandle {
 /// isn't received before the timeout expires, it forcibly cancels the BLE
 /// connection and signals the abort.
 pub fn spawn(
-    addr_text: String,
-    addr_type_str: String,
     timeout_ms: u32,
 ) -> WatchdogHandle {
     let (tx, rx): (Sender<WatchdogMsg>, Receiver<WatchdogMsg>) = mpsc::channel();
@@ -72,7 +70,7 @@ pub fn spawn(
         .name("ble-wd".into())
         .stack_size(4096)
         .spawn(move || {
-            watchdog_loop(rx, wd_signal, &addr_text, &addr_type_str, timeout_ms);
+            watchdog_loop(rx, wd_signal, timeout_ms);
         })
         .expect("failed to spawn watchdog thread");
 
@@ -86,8 +84,6 @@ pub fn spawn(
 fn watchdog_loop(
     rx: Receiver<WatchdogMsg>,
     abort_signal: std::sync::Arc<Signal<EspRawMutex, ()>>,
-    addr_text: &str,
-    addr_type_str: &str,
     timeout_ms: u32,
 ) {
     loop {
@@ -127,7 +123,13 @@ fn watchdog_loop(
 
         if timed_out {
             warn!("watchdog: connect timed out after {timeout_ms}ms");
-            nimble::force_terminate_connection(addr_text, addr_type_str);
+            // Only cancel the pending GAP connect.  Do NOT terminate
+            // established connections by conn_handle — that bypasses
+            // BLEClient's internal state tracking and corrupts NimBLE's
+            // GATT layer, causing phantom connections on subsequent retries.
+            // The retry loop calls client.disconnect() which is the correct
+            // cleanup path.
+            nimble::cancel_connect();
             abort_signal.signal(());
         }
     }
