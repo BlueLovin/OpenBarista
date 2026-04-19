@@ -1,6 +1,7 @@
 const ADC_MAX: f32 = 4095.0;
 const ADC_VREF: f32 = 3.3;
 const ZERO_PSI_VOLTAGE: f32 = 0.35;
+const MIN_PSI_TO_REPORT: f32 = 2.0;
 const FULL_SCALE_VOLTAGE: f32 = 4.5;
 const FULL_SCALE_PSI: f32 = 200.0;
 const PSI_TO_BAR: f32 = 0.068_947_6;
@@ -19,8 +20,14 @@ pub fn voltage_from_raw(raw: u16) -> f32 {
 }
 
 pub fn psi_from_voltage(volts: f32) -> f32 {
-    ((volts - ZERO_PSI_VOLTAGE) * (FULL_SCALE_PSI / (FULL_SCALE_VOLTAGE - ZERO_PSI_VOLTAGE)))
-        .max(0.0)
+    let psi = (volts - ZERO_PSI_VOLTAGE)
+        * (FULL_SCALE_PSI / (FULL_SCALE_VOLTAGE - ZERO_PSI_VOLTAGE)).max(0.0);
+
+    if psi < MIN_PSI_TO_REPORT {
+        return 0.0;
+    }
+
+    psi
 }
 
 pub fn bar_from_psi(psi: f32) -> f32 {
@@ -28,11 +35,11 @@ pub fn bar_from_psi(psi: f32) -> f32 {
 }
 
 pub fn sanitize_weight_g(weight_g: f32) -> f32 {
-    if weight_g.is_finite() {
-        weight_g.max(0.0)
-    } else {
-        0.0
+    if !weight_g.is_finite() {
+        return 0.0;
     }
+
+    weight_g.max(0.0)
 }
 
 pub fn sanitize_signed_weight_g(weight_g: f32) -> f32 {
