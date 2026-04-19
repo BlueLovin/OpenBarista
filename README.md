@@ -194,6 +194,31 @@ Then run:
 bash scripts/bootstrap.sh
 ```
 
+### Linux serial access group (needed for flashing)
+
+Most Linux distros expose ESP serial ports as `/dev/ttyUSB*` or `/dev/ttyACM*`.
+To flash without root, your user must be in that device's group.
+
+- Debian/Ubuntu: usually `dialout`
+- Fedora/Arch and some others: often `uucp`
+
+Check the actual device group with:
+
+```sh
+ls -l /dev/ttyUSB* /dev/ttyACM* 2>/dev/null
+```
+
+Add your user to a group (example):
+
+```sh
+sudo usermod -aG dialout "$USER"
+sudo usermod -aG uucp "$USER"
+```
+
+Then log out and back in for group changes to apply.
+
+`scripts/bootstrap.sh` also attempts to add your user to detected/common serial groups automatically.
+
 What bootstrap does:
 
 - Ensures `~/.cargo/bin` is on your PATH

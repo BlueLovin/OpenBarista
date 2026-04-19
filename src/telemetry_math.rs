@@ -35,6 +35,16 @@ pub fn sanitize_weight_g(weight_g: f32) -> f32 {
     }
 }
 
+pub fn sanitize_signed_weight_g(weight_g: f32) -> f32 {
+    const MAX_ABS_WEIGHT_G: f32 = 5_000.0;
+
+    if weight_g.is_finite() {
+        weight_g.clamp(-MAX_ABS_WEIGHT_G, MAX_ABS_WEIGHT_G)
+    } else {
+        0.0
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct FlowEstimator {
     last_weight_g: Option<f32>,
@@ -158,7 +168,7 @@ pub fn temperature_c_from_raw(raw_code: u16, ref_resistor: f32, nominal_resistan
 #[cfg(test)]
 mod tests {
     use super::{
-        bar_from_psi, psi_from_voltage, sanitize_weight_g, temperature_c_from_raw,
+        bar_from_psi, psi_from_voltage, sanitize_signed_weight_g, sanitize_weight_g, temperature_c_from_raw,
         voltage_from_raw, FlowEstimator,
     };
 
@@ -197,6 +207,13 @@ mod tests {
     fn pressure_clamps_below_zero_point() {
         approx_eq(psi_from_voltage(0.0), 0.0, 1e-6);
         approx_eq(psi_from_voltage(0.35), 0.0, 1e-6);
+    }
+
+    #[test]
+    fn signed_weight_sanitizer_clamps_extremes() {
+        approx_eq(sanitize_signed_weight_g(-12.34), -12.34, 1e-6);
+        approx_eq(sanitize_signed_weight_g(9_999.0), 5_000.0, 1e-6);
+        approx_eq(sanitize_signed_weight_g(f32::NAN), 0.0, 1e-6);
     }
 
     #[test]

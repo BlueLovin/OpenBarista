@@ -111,6 +111,92 @@ require_generated_libclang() {
   fi
 }
 
+SERIAL_GROUPS_CHANGED=0
+
+serial_group_is_safe() {
+  case "$1" in
+    dialout|uucp|plugdev)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+add_user_to_group() {
+  local user_name="$1"
+  local group_name="$2"
+
+  if [[ "$(id -u)" -eq 0 ]]; then
+    usermod -aG "${group_name}" "${user_name}"
+    return
+  fi
+
+  if command -v sudo >/dev/null 2>&1; then
+    sudo usermod -aG "${group_name}" "${user_name}"
+    return
+  fi
+
+  echo "Need root privileges to add ${user_name} to ${group_name}." >&2
+  echo "Run: sudo usermod -aG ${group_name} ${user_name}" >&2
+  exit 1
+}
+
+ensure_serial_flash_permissions() {
+  if [[ "$(uname -s)" != "Linux" ]]; then
+    return
+  fi
+
+  if ! command -v getent >/dev/null 2>&1; then
+    return
+  fi
+
+  local login_user="${SUDO_USER:-${USER}}"
+  local candidate_groups=()
+  local seen_groups=" "
+  local group_name
+  local dev
+  local dev_group
+
+  if getent group dialout >/dev/null 2>&1; then
+    candidate_groups+=("dialout")
+  fi
+
+  if getent group uucp >/dev/null 2>&1; then
+    candidate_groups+=("uucp")
+  fi
+
+  shopt -s nullglob
+  for dev in /dev/ttyUSB* /dev/ttyACM*; do
+    dev_group="$(stat -c '%G' "${dev}" 2>/dev/null || true)"
+    if [[ -n "${dev_group}" ]] \
+      && serial_group_is_safe "${dev_group}" \
+      && getent group "${dev_group}" >/dev/null 2>&1; then
+      candidate_groups+=("${dev_group}")
+    fi
+  done
+  shopt -u nullglob
+
+  for group_name in "${candidate_groups[@]}"; do
+    if ! serial_group_is_safe "${group_name}"; then
+      continue
+    fi
+    if [[ "${seen_groups}" == *" ${group_name} "* ]]; then
+      continue
+    fi
+    seen_groups+="${group_name} "
+
+    if id -nG "${login_user}" | tr ' ' '\n' | grep -Fxq "${group_name}"; then
+      continue
+    fi
+
+    echo "Adding ${login_user} to ${group_name} for serial flashing access..."
+    add_user_to_group "${login_user}" "${group_name}"
+    SERIAL_GROUPS_CHANGED=1
+  done
+}
+
 ensure_path_line
 
 mkdir -p "${ESP_ENV_DIR}"
@@ -155,6 +241,8 @@ require_generated_libclang
 
 cargo +stable install --locked ldproxy espflash cargo-espflash
 
+ensure_serial_flash_permissions
+
 cat <<EOF
 
 Bootstrap complete.
@@ -169,3 +257,8 @@ cargo run
 The ESP environment file for this project is:
 ${ESP_ENV_FILE}
 EOF
+
+if [[ "${SERIAL_GROUPS_CHANGED}" -eq 1 ]]; then
+  echo
+  echo "Serial group membership was updated. Log out and back in before flashing."
+fi

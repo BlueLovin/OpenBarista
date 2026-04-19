@@ -107,7 +107,7 @@
             <p class="eyebrow">Bluetooth Scale</p>
             <h2>Scale Pairing</h2>
             <p class="hint">
-              Tap Find Scales, then tap your scale. No MAC addresses, UUIDs, or extra setup.
+              Tap Find Scales to search for nearby Bluetooth scales.
             </p>
           </div>
           <button id="scanScalesBtn" type="button" class="btn-secondary">
@@ -115,12 +115,17 @@
           </button>
         </div>
 
-        <article id="scaleCurrentCard" class="scale-current scale-current-empty">
+        <article
+          id="scaleCurrentCard"
+          class="scale-current scale-current-empty"
+        >
           <strong>No scale saved yet</strong>
-          <p>Use Find Scales and tap your scale to save it.</p>
+          <p>Tap Find Scales to get started.</p>
         </article>
 
-        <p id="scaleStatus" class="status">Checking Bluetooth scale status...</p>
+        <p id="scaleStatus" class="status">
+          Checking Bluetooth scale status...
+        </p>
         <div id="scaleDeviceList" class="scale-list" aria-live="polite"></div>
       </section>
 

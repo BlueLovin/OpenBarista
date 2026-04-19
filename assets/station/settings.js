@@ -270,7 +270,7 @@ function renderScaleCurrent(data) {
     const title = document.createElement("strong");
     title.textContent = "No scale saved yet";
     const copy = document.createElement("p");
-    copy.textContent = "Use Find Scales and tap your scale to save it.";
+    copy.textContent = "Tap Find Scales to get started.";
     scaleCurrentCardEl.append(title, copy);
     return;
   }
@@ -350,7 +350,7 @@ function renderScaleDevices(data) {
     empty.textContent =
       data.state === "scanning"
         ? "Scanning nearby devices..."
-        : "No scale candidates yet. Tap Find Scales and wake your scale first.";
+        : "No devices found yet. Tap Find Scales to search.";
     scaleDeviceListEl.appendChild(empty);
     return;
   }
