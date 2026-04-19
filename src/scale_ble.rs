@@ -755,6 +755,82 @@ fn worker_loop(
                         req.addr_type_str,
                     );
 
+                    // --- Pre-connect scan: verify the device is actually
+                    //     advertising before committing to the retry loop.
+                    //     Without this, a powered-off scale triggers ~20
+                    //     connect→cancel cycles (~90 s) where each
+                    //     ble_gap_conn_cancel() dirties NimBLE's internal
+                    //     state, making subsequent attempts *less* likely to
+                    //     succeed.  A quick passive scan avoids all of that:
+                    //     if the device isn't advertising we bail instantly
+                    //     and let the auto-reconnect thread try again later.
+                    //     When the device IS found the controller's radio is
+                    //     warmed up and connection succeeds much faster. ---
+                    {
+                        let prescan_found = Arc::new(AtomicBool::new(false));
+                        let prescan_found2 = prescan_found.clone();
+                        let prescan_target = req.address_text.clone();
+
+                        {
+                            let mut s = lock_or_recover(&state);
+                            if s.is_active_connection(req.connection_id) {
+                                s.message = format!(
+                                    "Searching for {}...",
+                                    display_scale_name(&req.name)
+                                );
+                            }
+                        }
+
+                        let mut prescan = BLEScan::new();
+                        prescan
+                            .active_scan(false)
+                            .filter_duplicates(true)
+                            .interval(100)
+                            .window(99);
+
+                        println!("[scale] pre-connect scan for {}", req.address_text);
+                        let _ = prescan
+                            .start(ble_device, 3000, move |device, _data| {
+                                let ad = format!("{}", device.addr());
+                                if ad.eq_ignore_ascii_case(&prescan_target) {
+                                    prescan_found2.store(true, Ordering::Release);
+                                    return Some(()); // stop scan early
+                                }
+                                None::<()>
+                            })
+                            .await;
+
+                        cancel_gap_operations();
+
+                        if !prescan_found.load(Ordering::Acquire) {
+                            println!(
+                                "[scale] pre-connect scan: {} not advertising, skipping connect",
+                                req.address_text
+                            );
+                            let mut s = lock_or_recover(&state);
+                            if s.is_active_connection(req.connection_id) {
+                                s.state = ScaleConnectionState::Idle;
+                                s.message = format!(
+                                    "{} not found nearby. Will retry automatically.",
+                                    display_scale_name(&req.name)
+                                );
+                                s.active = None;
+                            }
+                            continue;
+                        }
+                        println!("[scale] pre-connect scan: found {}", req.address_text);
+
+                        {
+                            let mut s = lock_or_recover(&state);
+                            if s.is_active_connection(req.connection_id) {
+                                s.message = format!(
+                                    "Connecting to {}...",
+                                    display_scale_name(&req.name)
+                                );
+                            }
+                        }
+                    }
+
                     // Create a single client and reuse it across retry
                     // attempts.  Creating multiple BLEClients can leave
                     // stale entries in NimBLE's notification dispatch table,
