@@ -4,7 +4,7 @@
 //! byte slices and return an optional weight in grams. It lives in the library
 //! crate so that `cargo test` on the host can exercise it without flashing.
 
-use crate::telemetry_math::sanitize_weight_g;
+use crate::telemetry_math::{sanitize_signed_weight_g, sanitize_weight_g};
 
 // ---------------------------------------------------------------------------
 // Protocol enum
@@ -81,9 +81,8 @@ fn parse_bookoo(value: &[u8]) -> Option<f32> {
     }
     let sign: f32 = if value[6] == 0x2D { -1.0 } else { 1.0 };
     let raw = ((value[7] as u32) << 16) | ((value[8] as u32) << 8) | (value[9] as u32);
-    let weight_g = sign * (raw as f32) / 100.0;
-    // Bookoo explicitly encodes sign for tared weights — don't clamp to zero.
-    if weight_g.is_finite() { Some(weight_g) } else { None }
+    let weight_g = sanitize_signed_weight_g(sign * (raw as f32) / 100.0);
+    Some(weight_g)
 }
 
 // ---------------------------------------------------------------------------
@@ -369,6 +368,19 @@ mod tests {
         pkt[9] = 0xD2;
         let w = parse_bookoo(&pkt).expect("should parse");
         approx_eq(w, -12.34, 0.01);
+    }
+
+    #[test]
+    fn bookoo_clamps_unrealistic_weight() {
+        let mut pkt = [0u8; 20];
+        pkt[0] = 0x03;
+        pkt[1] = 0x0B;
+        pkt[6] = 0x2B;
+        pkt[7] = 0x0F;
+        pkt[8] = 0x42;
+        pkt[9] = 0x40; // 1,000,000 -> 10,000.00 g, clamp to 5,000 g
+        let w = parse_bookoo(&pkt).expect("should parse");
+        approx_eq(w, 5_000.0, 0.01);
     }
 
     #[test]

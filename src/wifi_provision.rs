@@ -446,15 +446,27 @@ where
         // failing immediately back to the application.
         unsafe {
             let mut raw_cfg: esp_idf_svc::sys::wifi_config_t = core::mem::zeroed();
-            esp_idf_svc::sys::esp_wifi_get_config(
+            let get_cfg_err = esp_idf_svc::sys::esp_wifi_get_config(
                 esp_idf_svc::sys::wifi_interface_t_WIFI_IF_STA,
                 &mut raw_cfg,
             );
+            if get_cfg_err != esp_idf_svc::sys::ESP_OK {
+                return Err(anyhow!(
+                    "esp_wifi_get_config(WIFI_IF_STA) failed: {}",
+                    get_cfg_err
+                ));
+            }
             raw_cfg.sta.failure_retry_cnt = 3;
-            esp_idf_svc::sys::esp_wifi_set_config(
+            let set_cfg_err = esp_idf_svc::sys::esp_wifi_set_config(
                 esp_idf_svc::sys::wifi_interface_t_WIFI_IF_STA,
                 &mut raw_cfg,
             );
+            if set_cfg_err != esp_idf_svc::sys::ESP_OK {
+                return Err(anyhow!(
+                    "esp_wifi_set_config(WIFI_IF_STA) failed: {}",
+                    set_cfg_err
+                ));
+            }
         }
 
         wifi.start()?;

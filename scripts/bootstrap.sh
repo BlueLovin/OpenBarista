@@ -84,6 +84,17 @@ require_generated_libclang() {
 
 SERIAL_GROUPS_CHANGED=0
 
+serial_group_is_safe() {
+  case "$1" in
+    dialout|uucp|plugdev)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 add_user_to_group() {
   local user_name="$1"
   local group_name="$2"
@@ -104,6 +115,14 @@ add_user_to_group() {
 }
 
 ensure_serial_flash_permissions() {
+  if [[ "$(uname -s)" != "Linux" ]]; then
+    return
+  fi
+
+  if ! command -v getent >/dev/null 2>&1; then
+    return
+  fi
+
   local login_user="${SUDO_USER:-${USER}}"
   local candidate_groups=()
   local seen_groups=" "
@@ -122,13 +141,18 @@ ensure_serial_flash_permissions() {
   shopt -s nullglob
   for dev in /dev/ttyUSB* /dev/ttyACM*; do
     dev_group="$(stat -c '%G' "${dev}" 2>/dev/null || true)"
-    if [[ -n "${dev_group}" ]] && getent group "${dev_group}" >/dev/null 2>&1; then
+    if [[ -n "${dev_group}" ]] \
+      && serial_group_is_safe "${dev_group}" \
+      && getent group "${dev_group}" >/dev/null 2>&1; then
       candidate_groups+=("${dev_group}")
     fi
   done
   shopt -u nullglob
 
   for group_name in "${candidate_groups[@]}"; do
+    if ! serial_group_is_safe "${group_name}"; then
+      continue
+    fi
     if [[ "${seen_groups}" == *" ${group_name} "* ]]; then
       continue
     fi

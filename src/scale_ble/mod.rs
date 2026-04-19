@@ -244,6 +244,7 @@ impl ScaleRuntime {
                 addr_type_str,
                 name,
             };
+            self.telemetry.clear_scale();
             // Send while holding the lock so no other thread can sneak in
             // between state update and command dispatch.
             if let Err(_) = tx.send(WorkerCommand::ConnectTarget(request)) {
@@ -255,7 +256,6 @@ impl ScaleRuntime {
             msg
         };
 
-        self.telemetry.clear_scale();
         self.reconnect_notify.notify_all();
         Ok(message)
     }
