@@ -256,9 +256,10 @@ async function bootstrapChartAssets() {
 function startTimer() {
   timerHandle = setInterval(() => {
     if (shotStartMs !== null && timerEl) {
-      timerEl.innerHTML =
-        formatTimer((performance.now() - shotStartMs) / 1000) +
-        "<span>s</span>";
+      const formatted = formatTimer((performance.now() - shotStartMs) / 1000);
+      timerEl.innerHTML = formatted + "<span>s</span>";
+      const indicatorTimer = document.getElementById('shotTimerIndicator');
+      if (indicatorTimer) indicatorTimer.textContent = formatted;
     }
   }, 50);
 }
@@ -280,6 +281,8 @@ function startShot() {
   shotActive = true;
   shotWeightZeroG = scaleConnected ? latestScaleWeightG : 0;
   windowS = 90;
+  const indicatorEl = document.getElementById('shotIndicator');
+  if (indicatorEl) indicatorEl.hidden = false;
   if (startBtn) {
     startBtn.textContent = "STOP EXTRACTION";
     startBtn.dataset.active = "1";
@@ -296,10 +299,25 @@ function stopShot() {
   shotWeightZeroG = null;
   windowS = IDLE_WINDOW_S;
   stopTimer();
+  const indicatorEl = document.getElementById('shotIndicator');
+  if (indicatorEl) indicatorEl.hidden = true;
   if (startBtn) {
     startBtn.textContent = "START EXTRACTION";
     delete startBtn.dataset.active;
   }
+  // Save the shot server-side and show a toast with a link.
+  fetch('/api/shots', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'action=save',
+  })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (d.ok) {
+        showToast('Shot saved! <a href="/history?id=' + d.id + '">View \u2192</a>');
+      }
+    })
+    .catch(function () { /* ignore network errors */ });
 }
 
 function formatTimer(totalSeconds) {
@@ -512,3 +530,15 @@ document.addEventListener("DOMContentLoaded", () => {
   setTimeout(bootstrapChartAssets, 50);
   startPolling();
 });
+
+function showToast(html) {
+  var toast = document.createElement('div');
+  toast.className = 'toast';
+  toast.innerHTML = html;
+  document.body.appendChild(toast);
+  setTimeout(function () {
+    toast.style.opacity = '0';
+    toast.style.transition = 'opacity 0.3s';
+    setTimeout(function () { toast.remove(); }, 350);
+  }, 5000);
+}
