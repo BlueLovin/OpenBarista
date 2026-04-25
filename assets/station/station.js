@@ -2,6 +2,74 @@ const POLL_MS = 250;
 const MAX_IDLE_PTS = 720;
 const IDLE_WINDOW_S = 60;
 
+// ─── Shot Storage ─────────────────────────────────────────────────────────────
+const SHOTS_STORAGE_KEY = "openbarista_shots";
+const MAX_SAVED_SHOTS = 20;
+const MIN_SHOT_DURATION_S = 3;
+
+function loadSavedShots() {
+  try {
+    const raw = localStorage.getItem(SHOTS_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch (_e) {
+    return [];
+  }
+}
+
+function persistShots(shots) {
+  try {
+    localStorage.setItem(SHOTS_STORAGE_KEY, JSON.stringify(shots));
+  } catch (_e) {
+    // localStorage unavailable or quota exceeded
+  }
+}
+
+function saveShot(shotXs, shotPressures, shotFlows, shotWeights, shotTargets) {
+  const duration = shotXs.length ? shotXs[shotXs.length - 1] : 0;
+  if (duration < MIN_SHOT_DURATION_S) return false;
+
+  const validP = shotPressures.filter((v) => v != null && Number.isFinite(v));
+  const peakBar = validP.length ? Math.max(...validP) : null;
+  const avgBar = validP.length
+    ? validP.reduce((a, b) => a + b, 0) / validP.length
+    : null;
+
+  const validW = shotWeights.filter((v) => v != null && Number.isFinite(v));
+  const firstW = validW.length ? validW[0] : null;
+  const lastW = validW.length ? validW[validW.length - 1] : null;
+  const finalWeightG =
+    firstW != null && lastW != null ? Math.max(0, lastW - firstW) : null;
+
+  const shot = {
+    id: String(Date.now()),
+    savedAt: Date.now(),
+    duration,
+    peakBar,
+    avgBar,
+    finalWeightG,
+    profile: profileSel ? profileSel.value : "None",
+    xs: shotXs,
+    pressures: shotPressures,
+    flows: shotFlows,
+    weights: shotWeights,
+    targets: shotTargets,
+  };
+
+  const shots = loadSavedShots();
+  shots.unshift(shot);
+  if (shots.length > MAX_SAVED_SHOTS) shots.splice(MAX_SAVED_SHOTS);
+  persistShots(shots);
+  return true;
+}
+
+function deleteSavedShot(id) {
+  persistShots(loadSavedShots().filter((s) => s.id !== id));
+}
+
+function clearAllSavedShots() {
+  persistShots([]);
+}
+
 const P_MIN = 0;
 const P_MAX = 12;
 const FLOW_MIN = 0;
@@ -291,6 +359,16 @@ function startShot() {
 }
 
 function stopShot() {
+  if (shotActive && xs.length > 1) {
+    const saved = saveShot(
+      [...xs],
+      [...pressures],
+      [...flows],
+      [...weights],
+      [...targets],
+    );
+    if (saved) showToast("Shot saved");
+  }
   shotActive = false;
   shotStartMs = null;
   shotWeightZeroG = null;
@@ -300,6 +378,389 @@ function stopShot() {
     startBtn.textContent = "START EXTRACTION";
     delete startBtn.dataset.active;
   }
+}
+
+// ─── Toast Notifications ─────────────────────────────────────────────────────
+function showToast(message, durationMs = 2800) {
+  const container = $("toastContainer");
+  if (!container) return;
+  const el = document.createElement("div");
+  el.className = "toast";
+  el.textContent = message;
+  container.appendChild(el);
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => el.classList.add("toast-show")),
+  );
+  setTimeout(() => {
+    el.classList.remove("toast-show");
+    el.addEventListener("transitionend", () => el.remove(), { once: true });
+  }, durationMs);
+}
+
+// ─── View Switching ───────────────────────────────────────────────────────────
+let currentView = "brew";
+
+function showView(view) {
+  currentView = view;
+  const brewView = $("brewView");
+  const historyView = $("historyView");
+  const navBrew = $("navBrew");
+  const navHistory = $("navHistory");
+
+  if (view === "brew") {
+    if (brewView) brewView.hidden = false;
+    if (historyView) historyView.hidden = true;
+    if (navBrew) {
+      navBrew.classList.add("nav-item-active");
+      navBrew.setAttribute("aria-current", "page");
+    }
+    if (navHistory) {
+      navHistory.classList.remove("nav-item-active");
+      navHistory.removeAttribute("aria-current");
+    }
+  } else if (view === "history") {
+    if (brewView) brewView.hidden = true;
+    if (historyView) historyView.hidden = false;
+    if (navBrew) {
+      navBrew.classList.remove("nav-item-active");
+      navBrew.removeAttribute("aria-current");
+    }
+    if (navHistory) {
+      navHistory.classList.add("nav-item-active");
+      navHistory.setAttribute("aria-current", "page");
+    }
+    renderHistory();
+  }
+}
+
+// ─── History View ─────────────────────────────────────────────────────────────
+let replayPlot = null;
+let replayPlotId = null;
+
+function renderHistory() {
+  const list = $("historyList");
+  if (!list) return;
+  list.innerHTML = "";
+
+  const replayPanelEl = $("replayPanel");
+  if (replayPanelEl) replayPanelEl.hidden = true;
+  if (replayPlot) {
+    replayPlot.destroy();
+    replayPlot = null;
+    replayPlotId = null;
+  }
+
+  const shots = loadSavedShots();
+  if (!shots.length) {
+    const empty = document.createElement("p");
+    empty.className = "history-empty";
+    empty.textContent =
+      "No shots saved yet. Start an extraction to begin recording!";
+    list.appendChild(empty);
+    return;
+  }
+
+  shots.forEach((shot) => {
+    const card = document.createElement("article");
+    card.className = "shot-card";
+    card.dataset.id = shot.id;
+
+    const date = new Date(shot.savedAt);
+    const dateFmt = date.toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+    });
+    const timeFmt = date.toLocaleTimeString(undefined, {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+    const hdr = document.createElement("div");
+    hdr.className = "shot-card-hdr";
+
+    const meta = document.createElement("div");
+    meta.className = "shot-card-meta";
+
+    const timeSpan = document.createElement("span");
+    timeSpan.className = "shot-card-time";
+    timeSpan.textContent = `${dateFmt} · ${timeFmt}`;
+
+    const profileSpan = document.createElement("span");
+    profileSpan.className = "shot-card-profile";
+    profileSpan.textContent = shot.profile;
+
+    meta.append(timeSpan, profileSpan);
+
+    const delBtn = document.createElement("button");
+    delBtn.className = "shot-del-btn";
+    delBtn.setAttribute("aria-label", "Delete this shot");
+    delBtn.dataset.id = shot.id;
+    delBtn.textContent = "\u2715";
+    delBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      deleteSavedShot(shot.id);
+      showToast("Shot deleted");
+      renderHistory();
+    });
+
+    hdr.append(meta, delBtn);
+    card.appendChild(hdr);
+
+    const statsRow = document.createElement("div");
+    statsRow.className = "shot-stats-row";
+
+    function makeStat(label, value, unit) {
+      const div = document.createElement("div");
+      div.className = "shot-stat";
+      const lbl = document.createElement("span");
+      lbl.className = "shot-stat-lbl";
+      lbl.textContent = label;
+      const val = document.createElement("span");
+      val.className = "shot-stat-val";
+      val.textContent = value;
+      if (unit) {
+        const u = document.createElement("span");
+        u.className = "shot-stat-unit";
+        u.textContent = unit;
+        val.appendChild(u);
+      }
+      div.append(lbl, val);
+      return div;
+    }
+
+    statsRow.append(
+      makeStat("Duration", formatTimer(shot.duration), "s"),
+      makeStat(
+        "Peak",
+        shot.peakBar != null ? shot.peakBar.toFixed(1) : "--",
+        shot.peakBar != null ? " bar" : "",
+      ),
+      makeStat(
+        "Avg",
+        shot.avgBar != null ? shot.avgBar.toFixed(1) : "--",
+        shot.avgBar != null ? " bar" : "",
+      ),
+      makeStat(
+        "Weight",
+        shot.finalWeightG != null ? shot.finalWeightG.toFixed(1) : "--",
+        shot.finalWeightG != null ? " g" : "",
+      ),
+    );
+    card.appendChild(statsRow);
+
+    const replayBtn = document.createElement("button");
+    replayBtn.className = "shot-replay-btn";
+    replayBtn.dataset.id = shot.id;
+    replayBtn.innerHTML = "&#9654; Replay";
+    replayBtn.addEventListener("click", () => showReplay(shot));
+    card.appendChild(replayBtn);
+
+    list.appendChild(card);
+  });
+}
+
+function buildReplayPlotOpts(width) {
+  const height = Math.min(180, Math.max(120, Math.floor(width * 0.45)));
+  return {
+    width,
+    height,
+    cursor: { show: false },
+    legend: { show: false },
+    scales: {
+      x: { time: false },
+      bar: { range: () => [P_MIN, P_MAX] },
+      flow: {
+        range: (_u, min, max) => [
+          FLOW_MIN,
+          Math.max(
+            FLOW_FALLBACK_MAX,
+            Math.ceil(Math.max(min ?? 0, max ?? 0) + 1),
+          ),
+        ],
+      },
+      weight: {
+        range: (_u, min, max) => [
+          WEIGHT_MIN,
+          Math.max(
+            WEIGHT_FALLBACK_MAX,
+            Math.ceil(Math.max(min ?? 0, max ?? 0) + 2),
+          ),
+        ],
+      },
+    },
+    axes: [
+      {
+        label: "t (s)",
+        labelSize: 12,
+        stroke: "#8192b5",
+        grid: { stroke: "#1d273a", width: 1 },
+        ticks: { stroke: "#2c3a56", width: 1 },
+        values: (_u, ticks) => ticks.map((v) => v.toFixed(0) + "s"),
+      },
+      {
+        scale: "bar",
+        label: "bar",
+        labelSize: 12,
+        stroke: "#ff9c66",
+        grid: { stroke: "#1d273a", width: 1 },
+        ticks: { stroke: "#2c3a56", width: 1 },
+        values: (_u, ticks) => ticks.map((v) => v.toFixed(1)),
+      },
+      {
+        scale: "flow",
+        side: 1,
+        label: "g/s",
+        labelSize: 12,
+        stroke: "#65a2ff",
+        grid: { show: false },
+        ticks: { stroke: "#2c3a56", width: 1 },
+        values: (_u, ticks) => ticks.map((v) => v.toFixed(1)),
+      },
+      {
+        scale: "weight",
+        side: 1,
+        label: "g",
+        labelSize: 12,
+        stroke: "#74e39a",
+        grid: { show: false },
+        ticks: { stroke: "#2c3a56", width: 1 },
+        values: (_u, ticks) => ticks.map((v) => v.toFixed(0)),
+      },
+    ],
+    series: [
+      {},
+      {
+        label: "Pressure",
+        scale: "bar",
+        stroke: "#ff9553",
+        width: 2.5,
+        fill: "rgba(255, 122, 47, 0.14)",
+        points: { show: false },
+      },
+      {
+        label: "Flow",
+        scale: "flow",
+        stroke: "#65a2ff",
+        width: 2,
+        fill: "rgba(101, 162, 255, 0.12)",
+        points: { show: false },
+      },
+      {
+        label: "Weight",
+        scale: "weight",
+        stroke: "#74e39a",
+        width: 2,
+        points: { show: false },
+      },
+      {
+        label: "Target",
+        scale: "bar",
+        stroke: "#c4ff5d",
+        width: 1.5,
+        dash: [6, 4],
+        points: { show: false },
+      },
+    ],
+  };
+}
+
+async function showReplay(shot) {
+  const replayPanelEl = $("replayPanel");
+  const replayChartEl = $("replayChart");
+  const replayStatsEl = $("replayStats");
+  if (!replayPanelEl || !replayChartEl) return;
+
+  replayPanelEl.hidden = false;
+  replayPanelEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+
+  if (replayPlot) {
+    replayPlot.destroy();
+    replayPlot = null;
+  }
+  replayChartEl.innerHTML = "";
+  replayPlotId = shot.id;
+
+  if (replayStatsEl) {
+    replayStatsEl.innerHTML = "";
+    const date = new Date(shot.savedAt);
+    const dateFmt = date.toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+    });
+    const timeFmt = date.toLocaleTimeString(undefined, {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+    function makeReplayStat(label, value, unit) {
+      const d = document.createElement("div");
+      d.className = "shot-stat";
+      const l = document.createElement("span");
+      l.className = "shot-stat-lbl";
+      l.textContent = label;
+      const v = document.createElement("span");
+      v.className = "shot-stat-val";
+      v.textContent = value;
+      if (unit) {
+        const u = document.createElement("span");
+        u.className = "shot-stat-unit";
+        u.textContent = unit;
+        v.appendChild(u);
+      }
+      d.append(l, v);
+      return d;
+    }
+
+    replayStatsEl.append(
+      makeReplayStat("Saved", `${dateFmt} · ${timeFmt}`, ""),
+      makeReplayStat("Duration", formatTimer(shot.duration), "s"),
+      makeReplayStat(
+        "Peak",
+        shot.peakBar != null ? shot.peakBar.toFixed(1) : "--",
+        shot.peakBar != null ? " bar" : "",
+      ),
+      makeReplayStat(
+        "Avg",
+        shot.avgBar != null ? shot.avgBar.toFixed(1) : "--",
+        shot.avgBar != null ? " bar" : "",
+      ),
+      makeReplayStat(
+        "Weight",
+        shot.finalWeightG != null ? shot.finalWeightG.toFixed(1) : "--",
+        shot.finalWeightG != null ? " g" : "",
+      ),
+    );
+  }
+
+  try {
+    await loadUplotJs();
+    ensureUplotCss();
+
+    if (replayPlotId !== shot.id) return;
+
+    const width =
+      replayChartEl.clientWidth || replayChartEl.offsetWidth || 280;
+    replayPlot = new uPlot(
+      buildReplayPlotOpts(width),
+      [shot.xs, shot.pressures, shot.flows, shot.weights, shot.targets],
+      replayChartEl,
+    );
+  } catch (_err) {
+    replayChartEl.innerHTML =
+      '<p class="replay-no-chart">Chart unavailable</p>';
+  }
+}
+
+function closeReplay() {
+  const replayPanelEl = $("replayPanel");
+  if (replayPanelEl) replayPanelEl.hidden = true;
+  if (replayPlot) {
+    replayPlot.destroy();
+    replayPlot = null;
+    replayPlotId = null;
+  }
+  const replayChartEl = $("replayChart");
+  if (replayChartEl) replayChartEl.innerHTML = "";
 }
 
 function formatTimer(totalSeconds) {
@@ -507,6 +968,37 @@ document.addEventListener("DOMContentLoaded", () => {
       if (i === 0) opt.selected = true;
       profileSel.appendChild(opt);
     });
+  }
+
+  const navBrewEl = $("navBrew");
+  const navHistoryEl = $("navHistory");
+  const clearHistoryBtnEl = $("clearHistoryBtn");
+  const closeReplayBtnEl = $("closeReplayBtn");
+
+  if (navBrewEl) {
+    navBrewEl.addEventListener("click", (e) => {
+      e.preventDefault();
+      showView("brew");
+    });
+  }
+
+  if (navHistoryEl) {
+    navHistoryEl.addEventListener("click", (e) => {
+      e.preventDefault();
+      showView("history");
+    });
+  }
+
+  if (clearHistoryBtnEl) {
+    clearHistoryBtnEl.addEventListener("click", () => {
+      clearAllSavedShots();
+      showToast("History cleared");
+      renderHistory();
+    });
+  }
+
+  if (closeReplayBtnEl) {
+    closeReplayBtnEl.addEventListener("click", closeReplay);
   }
 
   setTimeout(bootstrapChartAssets, 50);

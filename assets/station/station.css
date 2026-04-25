@@ -613,3 +613,295 @@
     font-size: 0.88rem;
   }
 }
+
+/* ─── Brew view wrapper ──────────────────────────────────────────────────────── */
+#brewView {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+#brewView[hidden] {
+  display: none;
+}
+
+/* ─── History view ───────────────────────────────────────────────────────────── */
+.history-view {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-bottom: 60px;
+}
+
+.history-view[hidden] {
+  display: none;
+}
+
+.history-hdr {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.history-title {
+  margin: 0;
+  font-family: "Space Grotesk", "Avenir Next", "Trebuchet MS", sans-serif;
+  font-size: 1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #e7ecf7;
+}
+
+.btn-history-action {
+  border: 1px solid #35455f;
+  background: #1a2335;
+  color: #d6e4ff;
+  border-radius: 10px;
+  padding: 5px 10px;
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 120ms ease;
+}
+
+.btn-history-action:hover {
+  border-color: #4a6080;
+}
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.history-empty {
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 0.88rem;
+  padding: 32px 20px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* ─── Shot cards ─────────────────────────────────────────────────────────────── */
+.shot-card {
+  border: 1px solid #2b3550;
+  border-radius: 16px;
+  background: linear-gradient(160deg, #141b2b 0%, #101725 100%);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.shot-card-hdr {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.shot-card-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.shot-card-time {
+  font-size: 0.84rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.shot-card-profile {
+  font-size: 0.68rem;
+  color: var(--brand-bright);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.shot-del-btn {
+  background: transparent;
+  border: 1px solid #33445f;
+  border-radius: 8px;
+  color: #7a8ba8;
+  font-size: 0.7rem;
+  padding: 3px 7px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    border-color 120ms ease,
+    color 120ms ease;
+}
+
+.shot-del-btn:hover {
+  border-color: #aa3325;
+  color: #ff8577;
+}
+
+.shot-stats-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.shot-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid #27324a;
+  border-radius: 10px;
+  background: #0e1622;
+  padding: 7px 8px;
+}
+
+.shot-stat-lbl {
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-dim);
+  font-weight: 700;
+}
+
+.shot-stat-val {
+  font-size: 0.92rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.shot-stat-unit {
+  font-size: 0.62rem;
+  font-weight: 400;
+  color: var(--text-dim);
+}
+
+.shot-replay-btn {
+  width: 100%;
+  border: 1px solid #2b4060;
+  border-radius: 10px;
+  background: rgba(101, 162, 255, 0.07);
+  color: var(--blue);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 7px;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
+}
+
+.shot-replay-btn:hover {
+  background: rgba(101, 162, 255, 0.14);
+  border-color: #3e5a85;
+}
+
+/* ─── Replay panel ───────────────────────────────────────────────────────────── */
+.replay-panel {
+  border: 1px solid #2b3550;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #111827 0%, #0d1320 100%);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.replay-panel[hidden] {
+  display: none;
+}
+
+.replay-hdr {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.replay-panel-title {
+  font-family: "Space Grotesk", "Avenir Next", "Trebuchet MS", sans-serif;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #e7ecf7;
+  font-weight: 700;
+}
+
+.replay-chart-wrap {
+  width: 100%;
+  min-height: 120px;
+}
+
+.replay-stats-row {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.replay-no-chart {
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  text-align: center;
+  padding: 20px;
+  margin: 0;
+}
+
+/* ─── Toast notifications ────────────────────────────────────────────────────── */
+.toast-container {
+  position: fixed;
+  bottom: 72px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.toast {
+  background: #1c2a3e;
+  border: 1px solid #37506e;
+  border-radius: 999px;
+  color: #d6e8ff;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 7px 16px;
+  opacity: 0;
+  transform: translateY(8px);
+  transition:
+    opacity 220ms ease,
+    transform 220ms ease;
+  white-space: nowrap;
+}
+
+.toast-show {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@media (max-width: 480px) {
+  .history-view {
+    padding-bottom: 72px;
+  }
+
+  .replay-stats-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .toast-container {
+    bottom: 68px;
+    width: calc(100% - 32px);
+  }
+
+  .toast {
+    text-align: center;
+    white-space: normal;
+  }
+}

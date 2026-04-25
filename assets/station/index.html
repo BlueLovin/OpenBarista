@@ -37,6 +37,8 @@
         </div>
       </header>
 
+      <div id="brewView">
+
       <section
         class="metric-grid metric-grid-main"
         aria-label="Live key metrics"
@@ -141,12 +143,32 @@
         <button id="startShotBtn" class="btn-shot">START EXTRACTION</button>
       </section>
 
+      </div><!-- #brewView -->
+
+      <div id="historyView" class="history-view" hidden>
+        <div class="history-hdr">
+          <h2 class="history-title">Shot History</h2>
+          <button id="clearHistoryBtn" class="btn-history-action">Clear All</button>
+        </div>
+        <div id="historyList" class="history-list"></div>
+        <div id="replayPanel" class="replay-panel" hidden>
+          <div class="replay-hdr">
+            <span class="replay-panel-title">Shot Replay</span>
+            <button id="closeReplayBtn" class="btn-history-action">&#x2715; Close</button>
+          </div>
+          <div id="replayChart" class="replay-chart-wrap"></div>
+          <div id="replayStats" class="replay-stats-row"></div>
+        </div>
+      </div><!-- #historyView -->
+
+      <div id="toastContainer" class="toast-container" aria-live="polite" aria-atomic="true"></div>
+
       <nav class="bottom-nav" aria-label="Primary navigation">
-        <a class="nav-item nav-item-active" href="#" aria-current="page">
+        <a id="navBrew" class="nav-item nav-item-active" href="#" aria-current="page">
           <span class="nav-icon" aria-hidden="true">&#9789;</span>
           <span>Brew</span>
         </a>
-        <a class="nav-item" href="#">
+        <a id="navHistory" class="nav-item" href="#">
           <span class="nav-icon" aria-hidden="true">&#9716;</span>
           <span>History</span>
         </a>
