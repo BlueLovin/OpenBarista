@@ -56,6 +56,18 @@ const UPLOT_CSS: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/assets/station/uplot.min.css"
 ));
+const HISTORY_HTML_TEMPLATE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/assets/station/history.html"
+));
+const HISTORY_JS: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/assets/station/history.js"
+));
+const HISTORY_CSS: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/assets/station/history.css"
+));
 
 pub fn captive_index_html(build_id: &str, board_id: &str) -> String {
     PORTAL_HTML_TEMPLATE
@@ -153,4 +165,27 @@ pub fn settings_index_html(ip_addr: &str, build_id: &str, board_id: &str) -> Str
         .replace("{{IP_ADDR}}", ip_addr)
         .replace("{{BUILD_ID}}", build_id)
         .replace("{{BOARD_ID}}", board_id)
+}
+
+pub fn history_index_html(ip_addr: &str, build_id: &str, board_id: &str) -> String {
+    HISTORY_HTML_TEMPLATE
+        .replace("{{IP_ADDR}}", ip_addr)
+        .replace("{{BUILD_ID}}", build_id)
+        .replace("{{BOARD_ID}}", board_id)
+}
+
+pub fn history_js() -> StaticAsset {
+    StaticAsset {
+        content_type: "application/javascript; charset=utf-8",
+        cache_control: "public, max-age=86400",
+        body: HISTORY_JS,
+    }
+}
+
+pub fn history_css() -> StaticAsset {
+    StaticAsset {
+        content_type: "text/css; charset=utf-8",
+        cache_control: "public, max-age=86400",
+        body: HISTORY_CSS,
+    }
 }

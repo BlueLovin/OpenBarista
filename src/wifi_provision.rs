@@ -31,6 +31,8 @@ use crate::{
     scale_ble::{SavedScale, ScaleRuntime},
     web_assets,
 };
+use openbarista::shot_recorder::SharedShotRecorder;
+use openbarista::shot_store::SharedShotStore;
 use openbarista::telemetry_feed::SharedTelemetry;
 
 const NVS_NAMESPACE: &str = "wifi";
@@ -337,6 +339,8 @@ pub struct WifiRuntime {
     pub stack: WifiStack,
     pub station_http_server: EspHttpServer<'static>,
     temperature_offset_c: Arc<Mutex<f32>>,
+    /// Kept alive here so NTP continues syncing for the device lifetime.
+    _sntp: Option<esp_idf_svc::sntp::EspSntp<'static>>,
 }
 
 impl WifiRuntime {
@@ -376,6 +380,8 @@ pub fn setup_wifi<M>(
     nvs_partition: EspDefaultNvsPartition,
     telemetry: SharedTelemetry,
     scale_runtime: Arc<ScaleRuntime>,
+    shot_store: SharedShotStore,
+    shot_recorder: SharedShotRecorder,
 ) -> Result<WifiRuntime, anyhow::Error>
 where
     M: WifiModemPeripheral + 'static,
@@ -529,6 +535,13 @@ where
                 #[cfg(any(esp_idf_comp_mdns_enabled, esp_idf_comp_espressif__mdns_enabled))]
                 mdns: start_mdns()?,
             };
+            let sntp = esp_idf_svc::sntp::EspSntp::new_default().ok();
+            if sntp.is_some() {
+                println!("[ntp] SNTP client started.");
+            } else {
+                println!("[ntp] SNTP client failed to start; timestamps will be 0.");
+            }
+
             let station_http_server = start_station_http_server(
                 &ip_addr,
                 telemetry,
@@ -536,12 +549,15 @@ where
                 wifi,
                 temperature_offset_c.clone(),
                 scale_runtime.clone(),
+                shot_store,
+                shot_recorder,
             )?;
 
             let runtime = WifiRuntime {
                 stack,
                 station_http_server,
                 temperature_offset_c,
+                _sntp: sntp,
             };
             runtime.log_keepalive_state();
             return Ok(runtime);
@@ -946,6 +962,8 @@ pub fn start_station_http_server(
     _wifi: Arc<Mutex<BlockingWifi<EspWifi<'static>>>>,
     temperature_offset_c: Arc<Mutex<f32>>,
     scale_runtime: Arc<ScaleRuntime>,
+    shot_store: SharedShotStore,
+    shot_recorder: SharedShotRecorder,
 ) -> Result<EspHttpServer<'static>> {
     let saved_scale = read_saved_scale(&nvs_partition)?;
     scale_runtime.apply_saved_scale(saved_scale);
@@ -957,6 +975,7 @@ pub fn start_station_http_server(
     let board_id_value = board_id();
     let html = web_assets::station_index_html(ip_addr, &build_id_value, &board_id_value);
     let settings_html = web_assets::settings_index_html(ip_addr, &build_id_value, &board_id_value);
+    let history_html = web_assets::history_index_html(ip_addr, &build_id_value, &board_id_value);
     let mut server = EspHttpServer::new(&HttpConfig::default())?;
 
     server.fn_handler("/", Method::Get, move |req| {
@@ -990,7 +1009,14 @@ pub fn start_station_http_server(
         Ok::<_, anyhow::Error>(())
     })?;
 
-    let static_routes: [(&str, fn() -> web_assets::StaticAsset); 7] = [
+    server.fn_handler("/history", Method::Get, move |req| {
+        let headers = station_response_headers("text/html; charset=utf-8", "no-store");
+        req.into_response(200, Some("OK"), &headers)?
+            .write_all(history_html.as_bytes())?;
+        Ok::<_, anyhow::Error>(())
+    })?;
+
+    let static_routes: [(&str, fn() -> web_assets::StaticAsset); 9] = [
         ("/base.css", web_assets::base_css),
         ("/station.css", web_assets::station_css),
         ("/station.js", web_assets::station_js),
@@ -998,6 +1024,8 @@ pub fn start_station_http_server(
         ("/settings.js", web_assets::settings_js),
         ("/uplot.min.js", web_assets::uplot_js),
         ("/uplot.min.css", web_assets::uplot_css),
+        ("/history.js", web_assets::history_js),
+        ("/history.css", web_assets::history_css),
     ];
 
     for (path, asset_fn) in static_routes {
@@ -1113,6 +1141,170 @@ pub fn start_station_http_server(
         let (status_code, reason_phrase, payload) = match result {
             Ok(message) => (200, Some("OK"), action_result_json(true, &message)),
             Err(err) => (400, None, action_result_json(false, &err.to_string())),
+        };
+
+        let headers = response_headers("application/json; charset=utf-8", "no-store");
+        req.into_response(status_code, reason_phrase, &headers)?
+            .write_all(payload.as_bytes())?;
+        Ok::<_, anyhow::Error>(())
+    })?;
+
+    // ── Shot history API ────────────────────────────────────────────────────
+
+    let shots_list_store = shot_store.clone();
+    server.fn_handler("/api/shots", Method::Get, move |req| {
+        let summaries = match shots_list_store.lock() {
+            Ok(store) => store.list_summaries()?,
+            Err(_) => return Err(anyhow!("shot store unavailable")),
+        };
+        let payload = serde_json::to_string(&summaries)
+            .unwrap_or_else(|_| "[]".to_owned());
+        let headers = response_headers("application/json; charset=utf-8", "no-store");
+        req.into_response(200, Some("OK"), &headers)?
+            .write_all(payload.as_bytes())?;
+        Ok::<_, anyhow::Error>(())
+    })?;
+
+    let shots_detail_store = shot_store.clone();
+    server.fn_handler("/api/shot", Method::Get, move |req| {
+        // Parse ?id=N from the URI.
+        let uri = req.uri();
+        let id_str = uri
+            .split_once('?')
+            .and_then(|(_, qs)| {
+                form_urlencoded::parse(qs.as_bytes())
+                    .find(|(k, _)| k == "id")
+                    .map(|(_, v)| v.into_owned())
+            })
+            .unwrap_or_default();
+
+        let id: u32 = match id_str.parse() {
+            Ok(v) => v,
+            Err(_) => {
+                let headers = response_headers("application/json; charset=utf-8", "no-store");
+                req.into_response(400, Some("Bad Request"), &headers)?
+                    .write_all(b"{\"error\":\"missing or invalid id\"}")?;
+                return Ok::<_, anyhow::Error>(());
+            }
+        };
+
+        let shot = match shots_detail_store.lock() {
+            Ok(store) => store.get_shot(id)?,
+            Err(_) => return Err(anyhow!("shot store unavailable")),
+        };
+
+        match shot {
+            Some(s) => {
+                let payload = serde_json::to_string(&s)
+                    .unwrap_or_else(|_| "{}".to_owned());
+                let headers = response_headers("application/json; charset=utf-8", "no-store");
+                req.into_response(200, Some("OK"), &headers)?
+                    .write_all(payload.as_bytes())?;
+            }
+            None => {
+                let headers = response_headers("application/json; charset=utf-8", "no-store");
+                req.into_response(404, Some("Not Found"), &headers)?
+                    .write_all(b"{\"error\":\"shot not found\"}")?;
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })?;
+
+    let shots_post_store = shot_store.clone();
+    let shots_post_recorder = shot_recorder.clone();
+    server.fn_handler("/api/shots", Method::Post, move |mut req| {
+        let max_body_len = 128usize;
+        let body_str = match read_request_body_utf8(&mut req, max_body_len) {
+            Ok(body) => body,
+            Err(RequestBodyError::TooLarge) => {
+                let headers = response_headers("application/json; charset=utf-8", "no-store");
+                req.into_response(413, Some("Payload Too Large"), &headers)?
+                    .write_all(action_result_json(false, "Request body too large.").as_bytes())?;
+                return Ok::<_, anyhow::Error>(());
+            }
+            Err(RequestBodyError::InvalidUtf8) => {
+                let headers = response_headers("application/json; charset=utf-8", "no-store");
+                req.into_response(400, Some("Bad Request"), &headers)?
+                    .write_all(action_result_json(false, "Invalid UTF-8.").as_bytes())?;
+                return Ok::<_, anyhow::Error>(());
+            }
+            Err(RequestBodyError::Io(err)) => return Err(err),
+        };
+
+        let action = parse_form_field(&body_str, "action")
+            .unwrap_or_default()
+            .trim()
+            .to_owned();
+
+        let (status_code, reason_phrase, payload) = match action.as_str() {
+            "save" => {
+                // Manually finalise whatever is currently recording.
+                let shot = match shots_post_recorder.lock() {
+                    Ok(mut rec) => rec.finalize(),
+                    Err(_) => None,
+                };
+                match shot {
+                    Some(s) => {
+                        let saved_id = match shots_post_store.lock() {
+                            Ok(mut store) => {
+                                // store.save() assigns the final id; read it back
+                                // via the mutated shot — we must save first.
+                                store.save(s)?;
+                                // next_id was bumped; the saved id is next_id - 1.
+                                // Instead, we re-read last summary to get the id.
+                                store.list_summaries()
+                                    .ok()
+                                    .and_then(|mut v| { v.sort_unstable_by(|a, b| b.id.cmp(&a.id)); v.into_iter().next() })
+                                    .map(|s| s.id)
+                                    .unwrap_or(0)
+                            }
+                            Err(_) => return Err(anyhow!("shot store unavailable")),
+                        };
+                        let payload = format!(
+                            "{{\"ok\":true,\"id\":{},\"message\":\"Shot saved.\"}}",
+                            saved_id
+                        );
+                        (200, Some("OK"), payload)
+                    }
+                    None => (
+                        200,
+                        Some("OK"),
+                        action_result_json(false, "No shot in progress."),
+                    ),
+                }
+            }
+            "delete" => {
+                let id_str = parse_form_field(&body_str, "id").unwrap_or_default();
+                let id: u32 = match id_str.trim().parse() {
+                    Ok(v) => v,
+                    Err(_) => {
+                        let headers =
+                            response_headers("application/json; charset=utf-8", "no-store");
+                        req.into_response(400, Some("Bad Request"), &headers)?
+                            .write_all(
+                                action_result_json(false, "Missing or invalid id.").as_bytes(),
+                            )?;
+                        return Ok::<_, anyhow::Error>(());
+                    }
+                };
+                match shots_post_store.lock() {
+                    Ok(mut store) => match store.delete_shot(id) {
+                        Ok(true) => (200, Some("OK"), action_result_json(true, "Shot deleted.")),
+                        Ok(false) => (
+                            404,
+                            Some("Not Found"),
+                            action_result_json(false, "Shot not found."),
+                        ),
+                        Err(e) => (400, None, action_result_json(false, &e.to_string())),
+                    },
+                    Err(_) => return Err(anyhow!("shot store unavailable")),
+                }
+            }
+            _ => (
+                400,
+                Some("Bad Request"),
+                action_result_json(false, "Unsupported action."),
+            ),
         };
 
         let headers = response_headers("application/json; charset=utf-8", "no-store");

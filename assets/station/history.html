@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenBarista History</title>
+    <link rel="stylesheet" href="/base.css" />
+    <link rel="stylesheet" href="/uplot.min.css" />
+    <link rel="stylesheet" href="/history.css" />
+    <script src="/uplot.min.js" defer></script>
+    <script src="/history.js" defer></script>
+  </head>
+  <body>
+    <div class="bg-orb bg-orb-a" aria-hidden="true"></div>
+    <div class="bg-orb bg-orb-b" aria-hidden="true"></div>
+
+    <main class="history-shell">
+      <header class="topbar">
+        <div class="brand-wrap">
+          <span class="brand-icon" aria-hidden="true">&#126;</span>
+          <h1>OPENBARISTA</h1>
+        </div>
+        <nav class="topbar-right" aria-label="Page navigation">
+          <a href="/">Live</a>
+          <span class="topbar-active">History</span>
+          <a href="/settings">Settings</a>
+        </nav>
+      </header>
+
+      <!-- ── List view ───────────────────────────────────────────────── -->
+      <div id="listView">
+        <div id="analyticsStrip" class="analytics-strip" hidden>
+          <div class="analytics-item">
+            <span class="analytics-label">Avg duration</span>
+            <strong id="avgDuration" class="analytics-value">--</strong>
+          </div>
+          <div class="analytics-item">
+            <span class="analytics-label">Avg yield</span>
+            <strong id="avgYield" class="analytics-value">--</strong>
+          </div>
+          <div class="analytics-item">
+            <span class="analytics-label">Avg pressure</span>
+            <strong id="avgPressure" class="analytics-value">--</strong>
+          </div>
+          <div class="analytics-item">
+            <span class="analytics-label">Avg temp</span>
+            <strong id="avgTemp" class="analytics-value">--</strong>
+          </div>
+        </div>
+
+        <div id="shotList" class="shot-list" role="list">
+          <p id="listEmpty" class="list-empty">No shots recorded yet.</p>
+        </div>
+      </div>
+
+      <!-- ── Detail view ─────────────────────────────────────────────── -->
+      <div id="detailView" hidden>
+        <div class="detail-header">
+          <a href="/history" class="back-link">&#8592; All shots</a>
+          <div class="detail-meta">
+            <span id="detailTimestamp" class="detail-timestamp">--</span>
+          </div>
+        </div>
+
+        <div id="detailChart" class="detail-chart" role="img" aria-label="Shot profile chart"></div>
+
+        <div class="detail-metrics" role="list" aria-label="Shot metrics">
+          <article class="detail-metric">
+            <p class="metric-label">Duration</p>
+            <strong id="detailDuration" class="metric-value">--</strong>
+            <span class="metric-unit">s</span>
+          </article>
+          <article class="detail-metric">
+            <p class="metric-label">Max pressure</p>
+            <strong id="detailMaxPressure" class="metric-value">--</strong>
+            <span class="metric-unit">bar</span>
+          </article>
+          <article class="detail-metric">
+            <p class="metric-label">Yield</p>
+            <strong id="detailYield" class="metric-value">--</strong>
+            <span class="metric-unit">g</span>
+          </article>
+          <article class="detail-metric">
+            <p class="metric-label">Avg temp</p>
+            <strong id="detailAvgTemp" class="metric-value">--</strong>
+            <span class="metric-unit">C</span>
+          </article>
+        </div>
+
+        <div class="detail-actions">
+          <button id="replayBtn" class="btn-replay">Replay</button>
+          <button id="deleteBtn" class="btn-delete">Delete shot</button>
+        </div>
+      </div>
+    </main>
+  </body>
+</html>
