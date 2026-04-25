@@ -381,13 +381,17 @@ function stopShot() {
 }
 
 // ─── Toast Notifications ─────────────────────────────────────────────────────
-function showToast(message, durationMs = 2800) {
+const TOAST_DURATION_MS = 2800;
+
+function showToast(message, durationMs = TOAST_DURATION_MS) {
   const container = $("toastContainer");
   if (!container) return;
   const el = document.createElement("div");
   el.className = "toast";
   el.textContent = message;
   container.appendChild(el);
+  // Double rAF ensures the browser has applied the initial CSS state
+  // (opacity: 0, translateY) before adding the transition class.
   requestAnimationFrame(() =>
     requestAnimationFrame(() => el.classList.add("toast-show")),
   );
@@ -559,8 +563,15 @@ function renderHistory() {
   });
 }
 
+const REPLAY_HEIGHT_MAX = 180;
+const REPLAY_HEIGHT_MIN = 120;
+const REPLAY_ASPECT_RATIO = 0.45;
+
 function buildReplayPlotOpts(width) {
-  const height = Math.min(180, Math.max(120, Math.floor(width * 0.45)));
+  const height = Math.min(
+    REPLAY_HEIGHT_MAX,
+    Math.max(REPLAY_HEIGHT_MIN, Math.floor(width * REPLAY_ASPECT_RATIO)),
+  );
   return {
     width,
     height,
