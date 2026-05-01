@@ -188,24 +188,41 @@
       replayBtn.textContent = 'Playing…';
       replayBtn.disabled = true;
 
-      var i = 0;
-      replayTimer = setInterval(function () {
-        i++;
+      // Show just the first point to start.
+      chart.setData([
+        xs.slice(0, 1),
+        pressure.slice(0, 1),
+        flow.slice(0, 1),
+        weight.slice(0, 1),
+      ]);
+
+      var i = 1;
+
+      function scheduleNext() {
         if (i >= xs.length) {
-          clearInterval(replayTimer);
           replayTimer = null;
           replayBtn.disabled = false;
           replayBtn.textContent = 'Replay again';
           chart.setData(fullData);
           return;
         }
-        chart.setData([
-          xs.slice(0, i),
-          pressure.slice(0, i),
-          flow.slice(0, i),
-          weight.slice(0, i),
-        ]);
-      }, 50);
+        // Delay = real time between this point and the previous one.
+        var prevMs = shot.points[i - 1].time_ms;
+        var currMs = shot.points[i].time_ms;
+        var delay = Math.max(16, currMs - prevMs);
+        replayTimer = setTimeout(function () {
+          i++;
+          chart.setData([
+            xs.slice(0, i),
+            pressure.slice(0, i),
+            flow.slice(0, i),
+            weight.slice(0, i),
+          ]);
+          scheduleNext();
+        }, delay);
+      }
+
+      scheduleNext();
     });
 
     // ── Delete ───────────────────────────────────────────────────────── //

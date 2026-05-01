@@ -352,6 +352,26 @@ impl ShotRecorder {
         !matches!(self.state, RecorderState::Idle)
     }
 
+    /// Manually starts recording regardless of current pressure.
+    ///
+    /// If recording is already in progress this is a no-op (the existing shot
+    /// continues). Use [`finalize`] to stop it.
+    pub fn force_start(&mut self, unix_timestamp: u64) {
+        if self.is_active() {
+            return;
+        }
+        let id = self.next_id;
+        self.next_id = self.next_id.wrapping_add(1);
+        let points = self.drain_pre_buf();
+        self.state = RecorderState::Recording {
+            points,
+            tick_count: 0,
+            record_ticker: 0,
+            start_unix_ts: unix_timestamp,
+            shot_id: id,
+        };
+    }
+
     // Drain the pre-shot ring buffer into a Vec of ShotPoints sampled at
     // RECORD_INTERVAL_TICKS (every 5 × 50ms = 250ms).
     fn drain_pre_buf(&self) -> Vec<ShotPoint> {

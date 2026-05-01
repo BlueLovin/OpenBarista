@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{
     io::ErrorKind,
     net::{Ipv4Addr as StdIpv4Addr, UdpSocket},
@@ -1237,6 +1237,29 @@ pub fn start_station_http_server(
             .to_owned();
 
         let (status_code, reason_phrase, payload) = match action.as_str() {
+            "start" => {
+                // Manually start a shot regardless of current pressure.
+                let unix_ts = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                match shots_post_recorder.lock() {
+                    Ok(mut rec) => {
+                        let was_active = rec.is_active();
+                        rec.force_start(unix_ts);
+                        let payload = format!(
+                            "{{\"ok\":true,\"already_active\":{}}}",
+                            was_active
+                        );
+                        (200, Some("OK"), payload)
+                    }
+                    Err(_) => (
+                        500,
+                        Some("Internal Server Error"),
+                        action_result_json(false, "Recorder unavailable."),
+                    ),
+                }
+            }
             "save" => {
                 // Manually finalise whatever is currently recording.
                 let shot = match shots_post_recorder.lock() {

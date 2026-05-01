@@ -277,10 +277,16 @@ function startShot() {
   flows = [];
   weights = [];
   targets = [];
+  lastSeq = -1; // ensure first poll after shot start is never skipped
   shotStartMs = performance.now();
   shotActive = true;
   shotWeightZeroG = scaleConnected ? latestScaleWeightG : 0;
   windowS = 90;
+  // Immediately clear the chart so idle data doesn't linger into the shot view.
+  if (plot) {
+    plot.setData([[], [], [], [], []]);
+    plot.setScale("x", { min: 0, max: 30 });
+  }
   const indicatorEl = document.getElementById('shotIndicator');
   if (indicatorEl) indicatorEl.hidden = false;
   if (startBtn) {
@@ -291,6 +297,12 @@ function startShot() {
   if (peakBarEl) peakBarEl.textContent = "--";
   if (avgBarEl) avgBarEl.textContent = "--";
   startTimer();
+  // Tell the backend to start recording regardless of pressure.
+  fetch('/api/shots', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'action=start',
+  }).catch(function () { /* ignore network errors */ });
 }
 
 function stopShot() {
