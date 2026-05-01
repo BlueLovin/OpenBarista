@@ -118,17 +118,22 @@ fn decode_shot(buf: &[u8]) -> Option<ShotRecord> {
 }
 
 // ---------------------------------------------------------------------------
-// NvsShotStore
+// NvsShotStore  (ESP-IDF / xtensa target only)
 // ---------------------------------------------------------------------------
 
 /// Maximum number of shots stored in NVS. Oldest is overwritten when full.
 pub const MAX_STORED_SHOTS: usize = 10;
 
+#[cfg(target_arch = "xtensa")]
 const SHOTS_NAMESPACE: &str = "shots";
+#[cfg(target_arch = "xtensa")]
 const KEY_HEAD: &str = "head";
+#[cfg(target_arch = "xtensa")]
 const KEY_COUNT: &str = "count";
+#[cfg(target_arch = "xtensa")]
 const KEY_NEXT_ID: &str = "next_id";
 
+#[cfg(target_arch = "xtensa")]
 fn slot_key(slot: usize) -> &'static str {
     // NVS keys must be ≤ 15 chars. "s0"–"s9" are all fine.
     const KEYS: [&str; 10] = ["s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9"];
@@ -136,6 +141,7 @@ fn slot_key(slot: usize) -> &'static str {
 }
 
 /// Shot store backed by ESP-IDF NVS blobs.
+#[cfg(target_arch = "xtensa")]
 pub struct NvsShotStore {
     nvs_partition: esp_idf_svc::nvs::EspDefaultNvsPartition,
     /// Index of the next write slot (0–9).
@@ -146,6 +152,7 @@ pub struct NvsShotStore {
     next_id: u32,
 }
 
+#[cfg(target_arch = "xtensa")]
 impl NvsShotStore {
     pub fn new(nvs_partition: esp_idf_svc::nvs::EspDefaultNvsPartition) -> Result<Self> {
         use esp_idf_svc::nvs::EspNvs;
@@ -202,6 +209,7 @@ impl NvsShotStore {
     }
 }
 
+#[cfg(target_arch = "xtensa")]
 impl ShotStore for NvsShotStore {
     fn save(&mut self, mut shot: ShotRecord) -> Result<()> {
         // Assign a stable ID from the store's sequence, so IDs remain unique

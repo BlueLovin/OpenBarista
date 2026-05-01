@@ -19,17 +19,17 @@
 }
 
 .topbar-right a {
-  color: var(--c-muted);
+  color: var(--text-dim);
   text-decoration: none;
   transition: color 0.15s;
 }
 
 .topbar-right a:hover {
-  color: var(--c-text);
+  color: var(--text);
 }
 
 .topbar-active {
-  color: var(--c-accent);
+  color: var(--brand);
   font-weight: 600;
 }
 
@@ -39,10 +39,11 @@
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 0.5rem;
-  background: var(--c-surface);
+  background: var(--surface);
   border-radius: 12px;
   padding: 1rem;
   margin-top: 0.5rem;
+  border: 1px solid var(--line);
 }
 
 .analytics-item {
@@ -54,16 +55,17 @@
 }
 
 .analytics-label {
-  font-size: 0.7rem;
-  color: var(--c-muted);
+  font-size: 0.65rem;
+  color: var(--text-dim);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.06em;
 }
 
 .analytics-value {
   font-size: 1.1rem;
   font-family: var(--font-mono, monospace);
-  color: var(--c-text);
+  color: var(--text);
+  font-weight: 600;
 }
 
 /* ── Shot list ────────────────────────────────────────────────────────── */
@@ -71,69 +73,78 @@
 .shot-list {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 0.5rem;
 }
 
 .list-empty {
-  color: var(--c-muted);
+  color: var(--text-dim);
   text-align: center;
-  margin-top: 2rem;
+  margin-top: 3rem;
   font-size: 0.95rem;
+  line-height: 1.6;
 }
 
 .shot-card {
-  background: var(--c-surface);
+  background: var(--surface);
   border-radius: 12px;
-  padding: 1rem 1.25rem;
+  padding: 0.9rem 1.1rem;
   display: grid;
   grid-template-columns: 1fr auto;
   align-items: center;
-  gap: 0.5rem 1rem;
+  gap: 0.4rem 1rem;
   cursor: pointer;
-  transition: background 0.15s, transform 0.1s;
-  border: 1px solid transparent;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+  border: 1px solid var(--line);
 }
 
 .shot-card:hover {
-  background: var(--c-surface-hover, color-mix(in srgb, var(--c-surface) 80%, var(--c-accent)));
-  border-color: var(--c-accent-dim, rgba(255, 120, 40, 0.25));
+  background: var(--surface-soft);
+  border-color: rgba(255, 122, 47, 0.3);
   transform: translateY(-1px);
 }
 
+.shot-card:active {
+  transform: translateY(0);
+}
+
 .shot-card-ts {
-  font-size: 0.8rem;
-  color: var(--c-muted);
+  font-size: 0.78rem;
+  color: var(--text-dim);
   grid-column: 1 / -1;
+  letter-spacing: 0.01em;
 }
 
 .shot-card-metrics {
   display: flex;
-  gap: 1.25rem;
+  gap: 1rem;
   flex-wrap: wrap;
+  align-items: flex-end;
 }
 
 .shot-card-metric {
   display: flex;
   flex-direction: column;
-  gap: 0.15rem;
+  gap: 0.1rem;
 }
 
 .shot-card-metric-label {
-  font-size: 0.65rem;
-  color: var(--c-muted);
+  font-size: 0.62rem;
+  color: var(--text-dim);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
 }
 
 .shot-card-metric-value {
   font-size: 1rem;
   font-family: var(--font-mono, monospace);
-  color: var(--c-text);
+  color: var(--text);
+  font-weight: 600;
 }
 
 .shot-card-chevron {
-  color: var(--c-muted);
-  font-size: 1.1rem;
+  color: var(--text-dim);
+  font-size: 1.25rem;
+  line-height: 1;
 }
 
 /* ── Detail view ─────────────────────────────────────────────────────── */
@@ -147,19 +158,19 @@
 }
 
 .detail-header .back-link {
-  color: var(--c-muted);
+  color: var(--text-dim);
   text-decoration: none;
   font-size: 0.9rem;
   transition: color 0.15s;
 }
 
 .detail-header .back-link:hover {
-  color: var(--c-text);
+  color: var(--text);
 }
 
 .detail-timestamp {
   font-size: 0.8rem;
-  color: var(--c-muted);
+  color: var(--text-dim);
 }
 
 .detail-chart {
@@ -172,9 +183,10 @@
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 0.5rem;
-  background: var(--c-surface);
+  background: var(--surface);
   border-radius: 12px;
   padding: 1rem;
+  border: 1px solid var(--line);
 }
 
 .detail-metric {
@@ -186,21 +198,22 @@
 }
 
 .detail-metric .metric-label {
-  font-size: 0.7rem;
-  color: var(--c-muted);
+  font-size: 0.65rem;
+  color: var(--text-dim);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.06em;
 }
 
 .detail-metric .metric-value {
   font-size: 1.2rem;
   font-family: var(--font-mono, monospace);
-  color: var(--c-text);
+  color: var(--text);
+  font-weight: 600;
 }
 
 .detail-metric .metric-unit {
-  font-size: 0.7rem;
-  color: var(--c-muted);
+  font-size: 0.68rem;
+  color: var(--text-dim);
 }
 
 .detail-actions {
@@ -211,7 +224,7 @@
 }
 
 .btn-replay {
-  background: var(--c-accent, #ff7828);
+  background: var(--brand);
   color: #fff;
   border: none;
   border-radius: 8px;
@@ -223,20 +236,20 @@
 }
 
 .btn-replay:hover {
-  background: var(--c-accent-hover, #e56b22);
+  background: var(--brand-bright);
   transform: translateY(-1px);
 }
 
 .btn-replay:disabled {
-  opacity: 0.7;
+  opacity: 0.6;
   cursor: not-allowed;
   transform: none;
 }
 
 .btn-delete {
   background: transparent;
-  color: var(--c-muted);
-  border: 1px solid var(--c-muted);
+  color: var(--text-dim);
+  border: 1px solid var(--line);
   border-radius: 8px;
   padding: 0.65rem 1.25rem;
   font-size: 0.9rem;
@@ -255,5 +268,9 @@
   .analytics-strip,
   .detail-metrics {
     grid-template-columns: repeat(2, 1fr);
+  }
+
+  .shot-card-metrics {
+    gap: 0.75rem;
   }
 }
