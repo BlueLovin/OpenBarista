@@ -18,6 +18,12 @@ pub enum ScaleProtocol {
     Unknown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BookooCommand {
+    TareAndStart,
+    SetFlowSmoothing(bool),
+}
+
 impl ScaleProtocol {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -42,6 +48,19 @@ pub fn parse_weight(protocol: ScaleProtocol, value: &[u8], previous_weight_g: f3
             parse_generic(value, previous_weight_g)
         }
     }
+}
+
+pub fn encode_bookoo_command(command: BookooCommand) -> [u8; 6] {
+    let mut packet = match command {
+        BookooCommand::TareAndStart => [0x03, 0x0A, 0x07, 0x00, 0x00, 0x00],
+        BookooCommand::SetFlowSmoothing(enabled) => {
+            [0x03, 0x0A, 0x08, u8::from(enabled), 0x00, 0x00]
+        }
+    };
+    packet[5] = packet[..5]
+        .iter()
+        .fold(0u8, |checksum, byte| checksum ^ byte);
+    packet
 }
 
 // ---------------------------------------------------------------------------
@@ -106,37 +125,92 @@ fn parse_generic(value: &[u8], previous_weight_g: f32) -> Option<f32> {
         // Little-endian i32
         if window.len() >= 4 {
             let raw = i32::from_le_bytes([window[0], window[1], window[2], window[3]]);
-            consider_raw(&mut best, &mut best_dist, raw as i64, start, half, previous_weight_g);
+            consider_raw(
+                &mut best,
+                &mut best_dist,
+                raw as i64,
+                start,
+                half,
+                previous_weight_g,
+            );
         }
         // Big-endian i32
         if window.len() >= 4 {
             let raw = i32::from_be_bytes([window[0], window[1], window[2], window[3]]);
-            consider_raw(&mut best, &mut best_dist, raw as i64, start, half, previous_weight_g);
+            consider_raw(
+                &mut best,
+                &mut best_dist,
+                raw as i64,
+                start,
+                half,
+                previous_weight_g,
+            );
         }
         // Little-endian 24-bit
         if window.len() >= 3 {
             let raw = (window[0] as i32) | ((window[1] as i32) << 8) | ((window[2] as i32) << 16);
-            consider_raw(&mut best, &mut best_dist, raw as i64, start, half, previous_weight_g);
+            consider_raw(
+                &mut best,
+                &mut best_dist,
+                raw as i64,
+                start,
+                half,
+                previous_weight_g,
+            );
         }
         // Big-endian 24-bit
         if window.len() >= 3 {
-            let raw =
-                ((window[0] as i32) << 16) | ((window[1] as i32) << 8) | (window[2] as i32);
-            consider_raw(&mut best, &mut best_dist, raw as i64, start, half, previous_weight_g);
+            let raw = ((window[0] as i32) << 16) | ((window[1] as i32) << 8) | (window[2] as i32);
+            consider_raw(
+                &mut best,
+                &mut best_dist,
+                raw as i64,
+                start,
+                half,
+                previous_weight_g,
+            );
         }
         // Little-endian i16 / u16
         if window.len() >= 2 {
             let signed = i16::from_le_bytes([window[0], window[1]]) as i64;
             let unsigned = u16::from_le_bytes([window[0], window[1]]) as i64;
-            consider_raw(&mut best, &mut best_dist, signed, start, half, previous_weight_g);
-            consider_raw(&mut best, &mut best_dist, unsigned, start, half, previous_weight_g);
+            consider_raw(
+                &mut best,
+                &mut best_dist,
+                signed,
+                start,
+                half,
+                previous_weight_g,
+            );
+            consider_raw(
+                &mut best,
+                &mut best_dist,
+                unsigned,
+                start,
+                half,
+                previous_weight_g,
+            );
         }
         // Big-endian i16 / u16
         if window.len() >= 2 {
             let signed = i16::from_be_bytes([window[0], window[1]]) as i64;
             let unsigned = u16::from_be_bytes([window[0], window[1]]) as i64;
-            consider_raw(&mut best, &mut best_dist, signed, start, half, previous_weight_g);
-            consider_raw(&mut best, &mut best_dist, unsigned, start, half, previous_weight_g);
+            consider_raw(
+                &mut best,
+                &mut best_dist,
+                signed,
+                start,
+                half,
+                previous_weight_g,
+            );
+            consider_raw(
+                &mut best,
+                &mut best_dist,
+                unsigned,
+                start,
+                half,
+                previous_weight_g,
+            );
         }
     }
 
@@ -434,12 +508,31 @@ mod tests {
 
         // GenericNotify falls through to generic parser
         let ascii = b"WT: 25.5 g";
-        let w =
-            parse_weight(ScaleProtocol::GenericNotify, ascii, 0.0).expect("generic ascii");
+        let w = parse_weight(ScaleProtocol::GenericNotify, ascii, 0.0).expect("generic ascii");
         approx_eq(w, 25.5, 0.01);
 
         // Unknown also falls through to generic parser
         let w = parse_weight(ScaleProtocol::Unknown, ascii, 0.0).expect("unknown ascii");
         approx_eq(w, 25.5, 0.01);
+    }
+
+    #[test]
+    fn encodes_bookoo_tare_and_start_command() {
+        assert_eq!(
+            encode_bookoo_command(BookooCommand::TareAndStart),
+            [0x03, 0x0A, 0x07, 0x00, 0x00, 0x0E],
+        );
+    }
+
+    #[test]
+    fn encodes_bookoo_flow_smoothing_commands() {
+        assert_eq!(
+            encode_bookoo_command(BookooCommand::SetFlowSmoothing(false)),
+            [0x03, 0x0A, 0x08, 0x00, 0x00, 0x01],
+        );
+        assert_eq!(
+            encode_bookoo_command(BookooCommand::SetFlowSmoothing(true)),
+            [0x03, 0x0A, 0x08, 0x01, 0x00, 0x00],
+        );
     }
 }

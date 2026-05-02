@@ -9,15 +9,14 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Result};
 use esp32_nimble::utilities::BleUuid;
+use esp32_nimble::BLERemoteCharacteristic;
 use log::{debug, info};
 
 use openbarista::sync_utils::lock_or_recover;
 use openbarista::telemetry_feed::SharedTelemetry;
 
 use super::nimble;
-use super::types::{
-    is_scale_like_name, ScaleConnectionState, ScaleManagerState, ScaleProtocol,
-};
+use super::types::{is_scale_like_name, ScaleConnectionState, ScaleManagerState, ScaleProtocol};
 use super::weight;
 
 // ---------------------------------------------------------------------------
@@ -28,6 +27,7 @@ const UUID_SERVICE_WEIGHT_SCALE: u16 = 0x181D;
 const UUID_CHAR_WEIGHT_MEASUREMENT: u16 = 0x2A9D;
 const UUID_SERVICE_BATTERY: u16 = 0x180F;
 const UUID_CHAR_BATTERY_LEVEL: u16 = 0x2A19;
+const UUID_CHAR_BOOKOO_COMMAND: u16 = 0xFF12;
 
 const COMMON_VENDOR_NOTIFY_UUIDS: &[u16] =
     &[0xFFF1, 0xFFF2, 0xFFF4, 0xFFE1, 0xFFE2, 0xFFE5, 0xFF11];
@@ -36,6 +36,31 @@ const COMMON_VENDOR_SERVICE_UUIDS: &[u16] =
 
 /// How many notification payloads to log in full before going silent.
 const DEBUG_LOG_COUNT: u8 = 8;
+
+pub(crate) struct DiscoveryResult {
+    pub protocol: ScaleProtocol,
+    pub bookoo_command_char: Option<BLERemoteCharacteristic>,
+    pub supports_manual_brew_start: bool,
+    pub supports_flow_smoothing: bool,
+}
+
+impl DiscoveryResult {
+    fn new(protocol: ScaleProtocol) -> Self {
+        Self {
+            protocol,
+            bookoo_command_char: None,
+            supports_manual_brew_start: false,
+            supports_flow_smoothing: false,
+        }
+    }
+
+    fn with_bookoo_command(mut self, characteristic: Option<BLERemoteCharacteristic>) -> Self {
+        self.bookoo_command_char = characteristic;
+        self.supports_manual_brew_start = self.bookoo_command_char.is_some();
+        self.supports_flow_smoothing = self.bookoo_command_char.is_some();
+        self
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Public entry point
@@ -49,7 +74,7 @@ pub async fn discover_and_subscribe(
     scale_name: &str,
     state: &Arc<Mutex<ScaleManagerState>>,
     telemetry: &SharedTelemetry,
-) -> Result<ScaleProtocol> {
+) -> Result<DiscoveryResult> {
     let scale_like = is_scale_like_name(scale_name);
 
     // Priority 1: Standard Weight Scale Service (0x181D / 0x2A9D)
@@ -111,7 +136,7 @@ async fn try_standard_service(
     connection_id: u64,
     state: &Arc<Mutex<ScaleManagerState>>,
     telemetry: &SharedTelemetry,
-) -> Result<Option<ScaleProtocol>> {
+) -> Result<Option<DiscoveryResult>> {
     let Ok(service) = client
         .get_service(BleUuid::from_uuid16(UUID_SERVICE_WEIGHT_SCALE))
         .await
@@ -141,7 +166,7 @@ async fn try_standard_service(
                 telemetry,
             )
             .await?;
-            return Ok(Some(ScaleProtocol::StandardWeight));
+            return Ok(Some(DiscoveryResult::new(ScaleProtocol::StandardWeight)));
         }
     }
 
@@ -154,7 +179,10 @@ async fn try_standard_service(
                     "{} on service 0x{UUID_SERVICE_WEIGHT_SCALE:04X}",
                     characteristic.uuid(),
                 );
-                info!("found alternate notify char {} in weight-scale service", characteristic.uuid());
+                info!(
+                    "found alternate notify char {} in weight-scale service",
+                    characteristic.uuid()
+                );
                 subscribe(
                     characteristic,
                     ScaleProtocol::GenericNotify,
@@ -168,7 +196,7 @@ async fn try_standard_service(
             }
         }
         if subscribed {
-            return Ok(Some(ScaleProtocol::GenericNotify));
+            return Ok(Some(DiscoveryResult::new(ScaleProtocol::GenericNotify)));
         }
     }
 
@@ -184,10 +212,26 @@ async fn try_vendor_services(
     connection_id: u64,
     state: &Arc<Mutex<ScaleManagerState>>,
     telemetry: &SharedTelemetry,
-) -> Result<Option<ScaleProtocol>> {
+) -> Result<Option<DiscoveryResult>> {
     for &svc_uuid16 in COMMON_VENDOR_SERVICE_UUIDS {
         let Ok(service) = client.get_service(BleUuid::from_uuid16(svc_uuid16)).await else {
             continue;
+        };
+
+        let bookoo_command_char = if svc_uuid16 == 0x0FFE {
+            service
+                .get_characteristic(BleUuid::from_uuid16(UUID_CHAR_BOOKOO_COMMAND))
+                .await
+                .ok()
+                .and_then(|characteristic| {
+                    if characteristic.can_write() || characteristic.can_write_no_response() {
+                        Some(characteristic.clone())
+                    } else {
+                        None
+                    }
+                })
+        } else {
+            None
         };
 
         let mut subscribed = false;
@@ -221,15 +265,28 @@ async fn try_vendor_services(
                 "found vendor char 0x{char_uuid16:04X} on service 0x{svc_uuid16:04X} proto={}",
                 proto.as_str(),
             );
-            subscribe(characteristic, proto, label, connection_id, state, telemetry).await?;
+            subscribe(
+                characteristic,
+                proto,
+                label,
+                connection_id,
+                state,
+                telemetry,
+            )
+            .await?;
+            if proto == ScaleProtocol::Bookoo {
+                return Ok(Some(
+                    DiscoveryResult::new(ScaleProtocol::Bookoo)
+                        .with_bookoo_command(bookoo_command_char.clone()),
+                ));
+            }
             subscribed = true;
         }
 
         // Any other notifying char on this vendor service.
         if let Ok(chars) = service.get_characteristics().await {
             for characteristic in chars {
-                let label =
-                    format!("{} on service 0x{svc_uuid16:04X}", characteristic.uuid());
+                let label = format!("{} on service 0x{svc_uuid16:04X}", characteristic.uuid());
                 if !seen.insert(label.clone()) {
                     continue;
                 }
@@ -254,7 +311,7 @@ async fn try_vendor_services(
         }
 
         if subscribed {
-            return Ok(Some(ScaleProtocol::GenericNotify));
+            return Ok(Some(DiscoveryResult::new(ScaleProtocol::GenericNotify)));
         }
     }
 
@@ -270,7 +327,7 @@ async fn try_brute_force(
     connection_id: u64,
     state: &Arc<Mutex<ScaleManagerState>>,
     telemetry: &SharedTelemetry,
-) -> Result<Option<ScaleProtocol>> {
+) -> Result<Option<DiscoveryResult>> {
     let Ok(services) = client.get_services().await else {
         return Ok(None);
     };
@@ -292,7 +349,10 @@ async fn try_brute_force(
                 continue;
             }
             let label = format!("{} on service {svc_uuid}", characteristic.uuid());
-            info!("brute-force: using char {} on service {svc_uuid}", characteristic.uuid());
+            info!(
+                "brute-force: using char {} on service {svc_uuid}",
+                characteristic.uuid()
+            );
             subscribe(
                 characteristic,
                 ScaleProtocol::GenericNotify,
@@ -307,7 +367,7 @@ async fn try_brute_force(
     }
 
     Ok(if subscribed {
-        Some(ScaleProtocol::GenericNotify)
+        Some(DiscoveryResult::new(ScaleProtocol::GenericNotify))
     } else {
         None
     })

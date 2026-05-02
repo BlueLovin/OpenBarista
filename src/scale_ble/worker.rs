@@ -4,14 +4,17 @@
 //! from the public API and the reconnect thread via an `mpsc` channel.
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::Sender as ReplySender;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use anyhow::{anyhow, Result};
 use embassy_futures::select::{select, Either};
-use esp32_nimble::{BLEAddress, BLEDevice, BLEScan};
+use esp32_nimble::{BLEAddress, BLEDevice, BLERemoteCharacteristic, BLEScan};
 use log::{debug, error, info, warn};
 
+use openbarista::scale_weight::{encode_bookoo_command, BookooCommand};
 use openbarista::sync_utils::lock_or_recover;
 use openbarista::telemetry_feed::SharedTelemetry;
 
@@ -41,9 +44,25 @@ pub(crate) struct ConnectRequest {
     pub name: String,
 }
 
+pub(crate) enum ScaleDeviceCommand {
+    StartManualBrew,
+    SetFlowSmoothing(bool),
+}
+
+pub(crate) struct CommandRequest {
+    pub command: ScaleDeviceCommand,
+    pub reply_tx: ReplySender<Result<String>>,
+}
+
+struct ActiveRuntimeConnection {
+    client: esp32_nimble::BLEClient,
+    bookoo_command_char: Option<BLERemoteCharacteristic>,
+}
+
 pub(crate) enum WorkerCommand {
     StartScan,
     ConnectTarget(ConnectRequest),
+    ExecuteCommand(CommandRequest),
     Disconnect,
 }
 
@@ -72,25 +91,25 @@ pub(crate) fn worker_loop(
         }
         info!("NimBLE transport ready");
 
-        let mut active_client: Option<esp32_nimble::BLEClient> = None;
+        let mut active_connection: Option<ActiveRuntimeConnection> = None;
 
         while let Ok(command) = rx.recv() {
             match command {
                 WorkerCommand::StartScan => {
-                    handle_scan(ble_device, &own_addr, &mut active_client, &state).await;
+                    handle_scan(ble_device, &own_addr, &mut active_connection, &state).await;
                 }
                 WorkerCommand::ConnectTarget(req) => {
-                    handle_connect(
-                        ble_device,
-                        req,
-                        &mut active_client,
-                        &state,
-                        &telemetry,
-                    )
-                    .await;
+                    handle_connect(ble_device, req, &mut active_connection, &state, &telemetry)
+                        .await;
+                }
+                WorkerCommand::ExecuteCommand(req) => {
+                    let result = handle_execute_command(&mut active_connection, &state, req).await;
+                    if let Err(err) = result {
+                        warn!("scale command failed: {err}");
+                    }
                 }
                 WorkerCommand::Disconnect => {
-                    handle_disconnect(&mut active_client, &state, &telemetry);
+                    handle_disconnect(&mut active_connection, &state, &telemetry);
                 }
             }
         }
@@ -104,11 +123,11 @@ pub(crate) fn worker_loop(
 async fn handle_scan(
     ble_device: &BLEDevice,
     own_addr: &Option<String>,
-    active_client: &mut Option<esp32_nimble::BLEClient>,
+    active_connection: &mut Option<ActiveRuntimeConnection>,
     state: &Arc<Mutex<ScaleManagerState>>,
 ) {
-    if let Some(mut old) = active_client.take() {
-        let _ = old.disconnect();
+    if let Some(mut old) = active_connection.take() {
+        let _ = old.client.disconnect();
     }
     nimble::cancel_all_gap_operations();
 
@@ -187,7 +206,10 @@ async fn handle_scan(
         s.message = if s.discovered.is_empty() {
             "No nearby scales found. Try moving the scale closer and scan again.".to_owned()
         } else {
-            format!("Found {} device(s). Tap one to connect.", s.discovered.len())
+            format!(
+                "Found {} device(s). Tap one to connect.",
+                s.discovered.len()
+            )
         };
     }
     info!("scan complete ({} devices)", s.discovered.len());
@@ -200,7 +222,7 @@ async fn handle_scan(
 async fn handle_connect(
     ble_device: &BLEDevice,
     req: ConnectRequest,
-    active_client: &mut Option<esp32_nimble::BLEClient>,
+    active_connection: &mut Option<ActiveRuntimeConnection>,
     state: &Arc<Mutex<ScaleManagerState>>,
     telemetry: &SharedTelemetry,
 ) {
@@ -208,15 +230,18 @@ async fn handle_connect(
     {
         let s = lock_or_recover(state);
         if !s.is_active_connection(req.connection_id) {
-            debug!("ignoring stale connect request for {}", display_scale_name(&req.name));
+            debug!(
+                "ignoring stale connect request for {}",
+                display_scale_name(&req.name)
+            );
             return;
         }
     }
 
     // Drop any existing client.
-    if let Some(mut old) = active_client.take() {
+    if let Some(mut old) = active_connection.take() {
         debug!("dropping previous client");
-        let _ = old.disconnect();
+        let _ = old.client.disconnect();
     }
     nimble::cancel_all_gap_operations();
 
@@ -330,7 +355,10 @@ async fn handle_connect(
             thread::sleep(Duration::from_millis(500));
             {
                 let mut s = lock_or_recover(state);
-                s.message = format!("Retrying connection to {}...", display_scale_name(&req.name));
+                s.message = format!(
+                    "Retrying connection to {}...",
+                    display_scale_name(&req.name)
+                );
             }
         }
 
@@ -463,7 +491,7 @@ async fn handle_connect(
     )
     .await
     {
-        Ok(protocol) => {
+        Ok(discovery_result) => {
             {
                 let mut s = lock_or_recover(state);
                 if !s.is_active_connection(req.connection_id) {
@@ -473,7 +501,9 @@ async fn handle_connect(
                     return;
                 }
                 if let Some(active) = s.active.as_mut() {
-                    active.protocol = protocol;
+                    active.protocol = discovery_result.protocol;
+                    active.supports_manual_brew_start = discovery_result.supports_manual_brew_start;
+                    active.supports_flow_smoothing = discovery_result.supports_flow_smoothing;
                 }
                 s.state = ScaleConnectionState::Ready;
                 s.message = format!("Connected to {}.", display_scale_name(&req.name));
@@ -484,7 +514,10 @@ async fn handle_connect(
             discovery::read_battery(&mut client, req.connection_id, state).await;
 
             info!("ready — streaming from {}", display_scale_name(&req.name));
-            *active_client = Some(client);
+            *active_connection = Some(ActiveRuntimeConnection {
+                client,
+                bookoo_command_char: discovery_result.bookoo_command_char,
+            });
         }
         Err(e) => {
             error!("discovery failed: {e}");
@@ -501,6 +534,71 @@ async fn handle_connect(
             }
         }
     }
+}
+
+async fn handle_execute_command(
+    active_connection: &mut Option<ActiveRuntimeConnection>,
+    state: &Arc<Mutex<ScaleManagerState>>,
+    req: CommandRequest,
+) -> Result<()> {
+    let result = execute_scale_command(active_connection, state, &req.command).await;
+    let _ = req.reply_tx.send(result);
+    Ok(())
+}
+
+async fn execute_scale_command(
+    active_connection: &mut Option<ActiveRuntimeConnection>,
+    state: &Arc<Mutex<ScaleManagerState>>,
+    command: &ScaleDeviceCommand,
+) -> Result<String> {
+    let Some(connection) = active_connection.as_mut() else {
+        return Err(anyhow!("No scale is connected right now."));
+    };
+
+    let active = lock_or_recover(state)
+        .active
+        .as_ref()
+        .map(|active| (active.name.clone(), active.protocol))
+        .ok_or_else(|| anyhow!("No scale is connected right now."))?;
+
+    if active.1 != ScaleProtocol::Bookoo {
+        return Err(anyhow!("Connected scale does not support BooKoo commands."));
+    }
+
+    let characteristic = connection.bookoo_command_char.as_mut().ok_or_else(|| {
+        anyhow!("Connected BooKoo scale did not expose a writable command channel.")
+    })?;
+
+    let (payload, success_message) = match *command {
+        ScaleDeviceCommand::StartManualBrew => (
+            encode_bookoo_command(BookooCommand::TareAndStart),
+            format!(
+                "Sent tare + start command to {}.",
+                display_scale_name(&active.0),
+            ),
+        ),
+        ScaleDeviceCommand::SetFlowSmoothing(enabled) => (
+            encode_bookoo_command(BookooCommand::SetFlowSmoothing(enabled)),
+            format!(
+                "Set flow smoothing {} on {}.",
+                if enabled { "on" } else { "off" },
+                display_scale_name(&active.0),
+            ),
+        ),
+    };
+
+    let response = characteristic.can_write();
+    characteristic
+        .write_value(&payload, response)
+        .await
+        .map_err(|err| anyhow!("BLE write failed: {err:?}"))?;
+
+    let mut s = lock_or_recover(state);
+    if s.active.as_ref().is_some() {
+        s.message = success_message.to_owned();
+    }
+
+    Ok(success_message)
 }
 
 fn set_connect_failed(
@@ -525,13 +623,13 @@ fn set_connect_failed(
 // ---------------------------------------------------------------------------
 
 fn handle_disconnect(
-    active_client: &mut Option<esp32_nimble::BLEClient>,
+    active_connection: &mut Option<ActiveRuntimeConnection>,
     state: &Arc<Mutex<ScaleManagerState>>,
     telemetry: &SharedTelemetry,
 ) {
-    if let Some(mut old) = active_client.take() {
+    if let Some(mut old) = active_connection.take() {
         info!("disconnect requested, terminating link");
-        let _ = old.disconnect();
+        let _ = old.client.disconnect();
         // on_disconnect callback handles state updates.
     } else {
         let mut s = lock_or_recover(state);

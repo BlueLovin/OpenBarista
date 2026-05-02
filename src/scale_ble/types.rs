@@ -66,6 +66,8 @@ pub struct ScaleStatusSnapshot {
     pub weight_g: f32,
     pub flow_gps: f32,
     pub battery_percent: Option<u8>,
+    pub supports_manual_brew_start: bool,
+    pub supports_flow_smoothing: bool,
     pub saved_scale: Option<SavedScale>,
     pub devices: Vec<DiscoveredScale>,
 }
@@ -93,6 +95,8 @@ pub(crate) struct ActiveScaleConnection {
     pub address_text: String,
     pub name: String,
     pub protocol: ScaleProtocol,
+    pub supports_manual_brew_start: bool,
+    pub supports_flow_smoothing: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -150,6 +154,16 @@ impl ScaleManagerState {
             .as_ref()
             .map(|a| a.protocol.as_str())
             .unwrap_or(ScaleProtocol::Unknown.as_str());
+        let supports_manual_brew_start = self
+            .active
+            .as_ref()
+            .map(|a| a.supports_manual_brew_start)
+            .unwrap_or(false);
+        let supports_flow_smoothing = self
+            .active
+            .as_ref()
+            .map(|a| a.supports_flow_smoothing)
+            .unwrap_or(false);
 
         let devices = self
             .discovered
@@ -178,6 +192,8 @@ impl ScaleManagerState {
             weight_g: self.weight_g,
             flow_gps: self.flow_gps,
             battery_percent: self.battery_percent,
+            supports_manual_brew_start,
+            supports_flow_smoothing,
             saved_scale: self.saved_scale.clone(),
             devices,
         }

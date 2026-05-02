@@ -323,6 +323,14 @@ function renderScaleCurrent(data) {
   actionRow.className = "scale-actions";
   if (connected) {
     actionRow.appendChild(buildScaleActionButton("Disconnect", "disconnect"));
+    if (data.supports_flow_smoothing) {
+      actionRow.appendChild(
+        buildScaleActionButton("Smooth Flow On", "flow_smoothing_on"),
+      );
+      actionRow.appendChild(
+        buildScaleActionButton("Smooth Flow Off", "flow_smoothing_off"),
+      );
+    }
   } else if (connectBusy) {
     // Show a cancel/disconnect button while connecting so the user isn't stuck.
     actionRow.appendChild(buildScaleActionButton("Cancel", "disconnect"));
@@ -442,6 +450,8 @@ async function sendScaleAction(action, address = "") {
       scan: "Finding nearby scales...",
       connect: "Connecting to the selected scale...",
       disconnect: "Disconnecting current scale...",
+      flow_smoothing_on: "Turning flow smoothing on...",
+      flow_smoothing_off: "Turning flow smoothing off...",
       forget: "Removing saved scale...",
     }[action] || "Updating scale...";
 
