@@ -1129,6 +1129,8 @@ pub fn start_station_http_server(
                 scale_for_post.connect_address(&saved_scale.address)
             }
             "disconnect" => scale_for_post.disconnect().map(str::to_owned),
+            "flow_smoothing_on" => scale_for_post.set_flow_smoothing(true),
+            "flow_smoothing_off" => scale_for_post.set_flow_smoothing(false),
             "forget" => {
                 clear_saved_scale(&nvs_for_scale_post)?;
                 scale_for_post.forget_saved_scale();
@@ -1157,8 +1159,7 @@ pub fn start_station_http_server(
             Ok(store) => store.list_summaries()?,
             Err(_) => return Err(anyhow!("shot store unavailable")),
         };
-        let payload = serde_json::to_string(&summaries)
-            .unwrap_or_else(|_| "[]".to_owned());
+        let payload = serde_json::to_string(&summaries).unwrap_or_else(|_| "[]".to_owned());
         let headers = response_headers("application/json; charset=utf-8", "no-store");
         req.into_response(200, Some("OK"), &headers)?
             .write_all(payload.as_bytes())?;
@@ -1195,8 +1196,7 @@ pub fn start_station_http_server(
 
         match shot {
             Some(s) => {
-                let payload = serde_json::to_string(&s)
-                    .unwrap_or_else(|_| "{}".to_owned());
+                let payload = serde_json::to_string(&s).unwrap_or_else(|_| "{}".to_owned());
                 let headers = response_headers("application/json; charset=utf-8", "no-store");
                 req.into_response(200, Some("OK"), &headers)?
                     .write_all(payload.as_bytes())?;
@@ -1212,6 +1212,7 @@ pub fn start_station_http_server(
 
     let shots_post_store = shot_store.clone();
     let shots_post_recorder = shot_recorder.clone();
+    let shots_post_scale = scale_runtime.clone();
     server.fn_handler("/api/shots", Method::Post, move |mut req| {
         let max_body_len = 128usize;
         let body_str = match read_request_body_utf8(&mut req, max_body_len) {
@@ -1247,9 +1248,17 @@ pub fn start_station_http_server(
                     Ok(mut rec) => {
                         let was_active = rec.is_active();
                         rec.force_start(unix_ts);
+                        let scale_command_sent = if !was_active {
+                            let snapshot = shots_post_scale.snapshot();
+                            snapshot.supports_manual_brew_start
+                                && shots_post_scale.start_manual_brew().is_ok()
+                        } else {
+                            false
+                        };
                         let payload = format!(
-                            "{{\"ok\":true,\"already_active\":{}}}",
-                            was_active
+                            "{{\"ok\":true,\"already_active\":{},\"scale_command_sent\":{}}}",
+                            was_active,
+                            if scale_command_sent { "true" } else { "false" },
                         );
                         (200, Some("OK"), payload)
                     }
@@ -1275,9 +1284,13 @@ pub fn start_station_http_server(
                                 store.save(s)?;
                                 // next_id was bumped; the saved id is next_id - 1.
                                 // Instead, we re-read last summary to get the id.
-                                store.list_summaries()
+                                store
+                                    .list_summaries()
                                     .ok()
-                                    .and_then(|mut v| { v.sort_unstable_by(|a, b| b.id.cmp(&a.id)); v.into_iter().next() })
+                                    .and_then(|mut v| {
+                                        v.sort_unstable_by(|a, b| b.id.cmp(&a.id));
+                                        v.into_iter().next()
+                                    })
                                     .map(|s| s.id)
                                     .unwrap_or(0)
                             }
@@ -1693,7 +1706,7 @@ fn scale_status_json(snapshot: &crate::scale_ble::ScaleStatusSnapshot) -> String
         .unwrap_or_else(|| "null".to_owned());
 
     format!(
-        "{{\"available\":{},\"state\":\"{}\",\"message\":\"{}\",\"connected_name\":\"{}\",\"connected_address\":\"{}\",\"protocol\":\"{}\",\"weight_g\":{:.3},\"flow_gps\":{:.3},\"battery_percent\":{},\"saved_scale\":{},\"devices\":{}}}",
+        "{{\"available\":{},\"state\":\"{}\",\"message\":\"{}\",\"connected_name\":\"{}\",\"connected_address\":\"{}\",\"protocol\":\"{}\",\"weight_g\":{:.3},\"flow_gps\":{:.3},\"battery_percent\":{},\"supports_manual_brew_start\":{},\"supports_flow_smoothing\":{},\"saved_scale\":{},\"devices\":{}}}",
         if snapshot.available { "true" } else { "false" },
         json_escape(&snapshot.state),
         json_escape(&snapshot.message),
@@ -1703,6 +1716,8 @@ fn scale_status_json(snapshot: &crate::scale_ble::ScaleStatusSnapshot) -> String
         sanitize_telemetry_value(snapshot.weight_g),
         sanitize_telemetry_value(snapshot.flow_gps),
         battery_json,
+        if snapshot.supports_manual_brew_start { "true" } else { "false" },
+        if snapshot.supports_flow_smoothing { "true" } else { "false" },
         saved_scale,
         devices_json,
     )

@@ -235,6 +235,8 @@ impl ScaleRuntime {
                 address_text: addr_text.clone(),
                 name: name.clone(),
                 protocol: ScaleProtocol::Unknown,
+                supports_manual_brew_start: false,
+                supports_flow_smoothing: false,
             });
             s.reset_live_values();
 
@@ -272,6 +274,14 @@ impl ScaleRuntime {
         self.connect_address(&address)
     }
 
+    pub fn start_manual_brew(&self) -> Result<String> {
+        self.send_command(ScaleDeviceCommand::StartManualBrew)
+    }
+
+    pub fn set_flow_smoothing(&self, enabled: bool) -> Result<String> {
+        self.send_command(ScaleDeviceCommand::SetFlowSmoothing(enabled))
+    }
+
     pub fn disconnect(&self) -> Result<&'static str> {
         let tx = self
             .worker_tx
@@ -303,6 +313,24 @@ impl ScaleRuntime {
 
         let _ = tx.send(WorkerCommand::Disconnect);
         Ok("Disconnected.")
+    }
+
+    fn send_command(&self, command: ScaleDeviceCommand) -> Result<String> {
+        let tx = self
+            .worker_tx
+            .as_ref()
+            .ok_or_else(|| anyhow!("Bluetooth is unavailable on this build."))?;
+
+        let (reply_tx, reply_rx) = mpsc::channel();
+        tx.send(WorkerCommand::ExecuteCommand(CommandRequest {
+            command,
+            reply_tx,
+        }))
+        .map_err(|_| anyhow!("Bluetooth worker stopped unexpectedly."))?;
+
+        reply_rx
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|_| anyhow!("Bluetooth worker did not answer in time."))?
     }
 }
 
@@ -361,6 +389,8 @@ fn reconnect_loop(
                 address_text: request.address_text.clone(),
                 name: request.name.clone(),
                 protocol: ScaleProtocol::Unknown,
+                supports_manual_brew_start: false,
+                supports_flow_smoothing: false,
             });
             s.reset_live_values();
             request
