@@ -3,7 +3,7 @@ const ADC_VREF: f32 = 3.3;
 const ZERO_PSI_VOLTAGE: f32 = 0.35;
 const MIN_PSI_TO_REPORT: f32 = 2.0;
 const FULL_SCALE_VOLTAGE: f32 = 4.5;
-const FULL_SCALE_PSI: f32 = 200.0;
+const FULL_SCALE_PSI: f32 = 250.0;
 const PSI_TO_BAR: f32 = 0.068_947_6;
 const FLOW_EMA_ALPHA: f32 = 0.34;
 const FLOW_DECAY_ALPHA: f32 = 0.62;
@@ -225,8 +225,9 @@ mod tests {
 
     #[test]
     fn pressure_maps_full_scale_voltage_to_full_scale_psi() {
-        approx_eq(psi_from_voltage(4.5), 200.0, 1e-3);
-        approx_eq(bar_from_psi(200.0), 13.78952, 1e-5);
+        approx_eq(psi_from_voltage(FULL_SCALE_VOLTAGE), FULL_SCALE_PSI, 1e-3);
+        // Hard-coded expected value to catch regressions in PSI_TO_BAR: 250 PSI ≈ 17.2369 bar
+        approx_eq(bar_from_psi(FULL_SCALE_PSI), 17.2369, 1e-3);
     }
 
     #[test]
