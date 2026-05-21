@@ -141,7 +141,7 @@ Conversion model (shared with host-side tests):
 - Raw voltage: `raw / 4095.0 * 3.3`
 - Zero reference: `0.35 V`
 - Full-scale voltage: `4.5 V`
-- Full-scale pressure: `200 PSI`
+- Full-scale pressure: `250 PSI`
 - PSI -> bar: `1 PSI = 0.0689476 bar`
 
 Important: do not drive ESP32 ADC pins above 3.3 V.
@@ -280,7 +280,7 @@ Math and telemetry logic include host-runnable tests.
 Example:
 
 ```sh
-cargo +stable test --lib --target x86_64-unknown-linux-gnu
+cargo test --lib --target $(rustc -vV | awk '/host:/ {print $2}')
 ```
 
 ## Project Layout

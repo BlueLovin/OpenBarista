@@ -176,7 +176,7 @@ pub fn temperature_c_from_raw(raw_code: u16, ref_resistor: f32, nominal_resistan
 mod tests {
     use super::{
         bar_from_psi, psi_from_voltage, sanitize_signed_weight_g, sanitize_weight_g, temperature_c_from_raw,
-        voltage_from_raw, FlowEstimator,
+        voltage_from_raw, FlowEstimator, FULL_SCALE_VOLTAGE, FULL_SCALE_PSI, PSI_TO_BAR,
     };
 
     const REF_RESISTOR: f32 = 430.0;
