@@ -143,7 +143,7 @@
       Math.max.apply(null, shot.points.map(function (p) { return p.pressure_bar; })).toFixed(2);
     document.getElementById('detailYield').textContent =
       (shot.points.length > 0
-        ? (shot.points[shot.points.length - 1].weight_g - shot.points[0].weight_g).toFixed(1)
+        ? Math.max(0, shot.points[shot.points.length - 1].weight_g - shot.points[0].weight_g).toFixed(1)
         : '0');
     var avgTemp = shot.points.length > 0
       ? shot.points.reduce(function (a, p) { return a + p.temperature_c; }, 0) / shot.points.length

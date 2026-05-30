@@ -370,9 +370,12 @@ impl ShotRecorder {
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1);
         let points = self.drain_pre_buf();
+        // Seed tick_count from the last pre-shot point so subsequent samples
+        // continue monotonically — same logic as auto-start in the Idle branch.
+        let initial_tick = points.last().map(|p| p.time_ms / 50).unwrap_or(0);
         self.state = RecorderState::Recording {
             points,
-            tick_count: 0,
+            tick_count: initial_tick,
             record_ticker: 0,
             start_unix_ts: unix_timestamp,
             shot_id: id,
