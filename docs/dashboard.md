@@ -33,6 +33,10 @@ The main dashboard shows:
 | **Boiler Temp** | Current temperature in °C | PT100 via MAX31865 |
 | **Extraction Weight** | Live weight in grams | BLE scale (if paired) |
 
+### Live Recording Indicator
+
+When a shot is in progress a recording badge appears at the top of the dashboard with a running timer. Shots are detected automatically when pressure ≥ 0.5 bar and temperature ≥ 70 °C, or can be started manually.
+
 ### Live Profile Chart
 
 A real-time chart showing pressure, flow, and weight over time. You can configure:
@@ -54,6 +58,39 @@ Shows whether a BLE scale is connected and syncing weight data.
 ### Shot Timer
 
 A running timer for the current extraction, with a **START EXTRACTION** button to begin tracking.
+
+---
+
+## Shot History
+
+Accessible at `http://<device-ip>/history` or via the **History** nav link.
+
+The history page shows all recorded shots stored on the device (up to 10; oldest is overwritten when full).
+
+### List View
+
+- Sortable list of past shots with timestamp, duration, max pressure, yield, and avg temperature
+- Summary analytics across all shots (avg duration, avg yield, avg max pressure, avg temp)
+
+### Detail View
+
+Tap any shot to open a detail view with:
+
+- A full pressure / flow / weight chart for the entire shot
+- Per-shot metrics matching the list view
+- **Replay** — re-runs the chart animation at real speed
+- **Delete** — removes the shot from NVS
+
+### Shot Detection
+
+Shots are recorded automatically. Detection criteria:
+
+- Pressure ≥ **0.5 bar**
+- Temperature ≥ **70 °C**
+
+3 seconds of pre-shot data are prepended to every recording so the ramp-up is captured. End-of-shot is debounced over 2 seconds to avoid false stops.
+
+Shots can also be started and stopped manually from the main dashboard.
 
 ---
 
@@ -95,8 +132,11 @@ The ESP32 exposes a JSON API for programmatic access:
 | `GET` | `/api/telemetry` | Latest telemetry snapshot (temp, pressure, weight, flow) |
 | `GET` | `/api/scale` | Scale status, saved pairing, discovered devices |
 | `GET` | `/api/settings` | Current device settings |
+| `GET` | `/api/shots` | List of shot summaries, newest first |
+| `GET` | `/api/shot?id=N` | Full point data for a single shot |
 | `POST` | `/api/scale` | Scale actions: scan, connect, disconnect, forget |
 | `POST` | `/api/settings` | Update settings (label, temp offset, Wi-Fi) |
+| `POST` | `/api/shots` | Shot actions: `start`, `save`, `delete` |
 | `GET` | `/networks` | Available Wi-Fi networks |
 
 Example:
