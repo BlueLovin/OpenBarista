@@ -317,11 +317,15 @@ function exitRecordingMode() {
 function startShot() {
   enterRecordingMode();
   // Tell the backend to start recording regardless of pressure.
+  // Mark as firmware-synced once the request lands so that a pressure-drop
+  // finalization by the firmware (before the user presses Stop) clears the UI.
   fetch('/api/shots', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: 'action=start',
-  }).catch(function () { /* ignore network errors */ });
+  })
+    .then(function () { shotSyncedFromFirmware = true; })
+    .catch(function () { /* ignore network errors */ });
 }
 
 function stopShot() {
