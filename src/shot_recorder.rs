@@ -11,6 +11,10 @@ use crate::telemetry_feed::TelemetrySnapshot;
 /// Minimum pressure (bar) to trigger shot start.
 pub const SHOT_START_PRESSURE_BAR: f32 = 0.5;
 
+/// Minimum temperature (°C) to trigger shot start.
+/// Below this the machine is too cold to be pulling espresso.
+pub const SHOT_START_TEMPERATURE_C: f32 = 70.0;
+
 /// Number of 50 ms ticks below threshold before a shot is finalised.
 /// 40 ticks × 50 ms = 2 s debounce.
 const SHOT_END_DEBOUNCE_TICKS: u32 = 40;
@@ -190,7 +194,8 @@ impl ShotRecorder {
             self.pre_buf_filled += 1;
         }
 
-        let above_threshold = snap.pressure_bar >= SHOT_START_PRESSURE_BAR;
+        let above_threshold = snap.pressure_bar >= SHOT_START_PRESSURE_BAR
+            && snap.temperature_c >= SHOT_START_TEMPERATURE_C;
 
         // Use a temporary replacement to satisfy the borrow checker when
         // transitioning states.
@@ -202,18 +207,20 @@ impl ShotRecorder {
                     let id = self.next_id;
                     self.next_id = self.next_id.wrapping_add(1);
                     let mut points = self.drain_pre_buf();
-                    // Append the current tick as the first "live" point.
+                    // Compute the live-point timestamp before pushing so we can
+                    // seed tick_count from it — ensuring subsequent recording
+                    // points continue monotonically after the pre-shot buffer.
+                    let live_t_ms = points
+                        .last()
+                        .map(|p: &ShotPoint| p.time_ms + (RECORD_INTERVAL_TICKS * 50))
+                        .unwrap_or(0);
                     if points.len() < MAX_SHOT_POINTS {
-                        let t_ms = points
-                            .last()
-                            .map(|p: &ShotPoint| p.time_ms + (RECORD_INTERVAL_TICKS * 50))
-                            .unwrap_or(0);
-                        points.push(snap_to_point(snap, t_ms));
+                        points.push(snap_to_point(snap, live_t_ms));
                     }
                     self.state = RecorderState::Recording {
                         points,
-                        tick_count: 1,
-                        record_ticker: 1,
+                        tick_count: live_t_ms / 50,
+                        record_ticker: 0,
                         start_unix_ts: unix_timestamp,
                         shot_id: id,
                     };
@@ -445,9 +452,13 @@ mod tests {
     use super::*;
 
     fn make_snap(pressure_bar: f32) -> TelemetrySnapshot {
+        make_snap_at_temp(pressure_bar, 93.0)
+    }
+
+    fn make_snap_at_temp(pressure_bar: f32, temperature_c: f32) -> TelemetrySnapshot {
         TelemetrySnapshot {
             seq: 0,
-            temperature_c: 93.0,
+            temperature_c,
             pressure_bar,
             pressure_psi: pressure_bar * 14.5,
             scale_connected: false,
@@ -455,6 +466,27 @@ mod tests {
             flow_gps: 0.0,
         }
     }
+
+    #[test]
+    fn cold_machine_does_not_start_shot() {
+        let mut rec = ShotRecorder::new();
+        // Pressure is above threshold but temperature is below 70 °C.
+        for _ in 0..100 {
+            let result = rec.update(&make_snap_at_temp(8.0, 45.0), 0);
+            assert!(result.is_none());
+        }
+        assert!(!rec.is_active());
+    }
+
+    #[test]
+    fn warm_machine_starts_shot() {
+        let mut rec = ShotRecorder::new();
+        rec.update(&make_snap_at_temp(8.0, 69.9), 0);
+        assert!(!rec.is_active(), "should not start below 70 °C");
+        rec.update(&make_snap_at_temp(8.0, 70.0), 0);
+        assert!(rec.is_active(), "should start at exactly 70 °C");
+    }
+
 
     #[test]
     fn idle_below_threshold_stays_idle() {

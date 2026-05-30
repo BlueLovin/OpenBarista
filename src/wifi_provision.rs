@@ -1244,30 +1244,45 @@ pub fn start_station_http_server(
                     .duration_since(UNIX_EPOCH)
                     .map(|d| d.as_secs())
                     .unwrap_or(0);
-                match shots_post_recorder.lock() {
+                // Hold the recorder lock only long enough to call force_start,
+                // then release it before issuing the BLE command.  The 50 ms
+                // sensor loop shares this mutex, so keeping it locked across a
+                // potentially slow BLE write would stall recording.
+                let (was_active, needs_brew_start) = match shots_post_recorder.lock() {
                     Ok(mut rec) => {
                         let was_active = rec.is_active();
                         rec.force_start(unix_ts);
-                        let scale_command_sent = if !was_active {
-                            let snapshot = shots_post_scale.snapshot();
-                            snapshot.supports_manual_brew_start
-                                && shots_post_scale.start_manual_brew().is_ok()
-                        } else {
-                            false
-                        };
-                        let payload = format!(
-                            "{{\"ok\":true,\"already_active\":{},\"scale_command_sent\":{}}}",
-                            was_active,
-                            if scale_command_sent { "true" } else { "false" },
-                        );
-                        (200, Some("OK"), payload)
+                        let needs = !was_active
+                            && shots_post_scale.snapshot().supports_manual_brew_start;
+                        (was_active, needs)
                     }
-                    Err(_) => (
-                        500,
-                        Some("Internal Server Error"),
-                        action_result_json(false, "Recorder unavailable."),
-                    ),
-                }
+                    Err(_) => {
+                        return Ok::<_, anyhow::Error>({
+                            let headers = response_headers(
+                                "application/json; charset=utf-8",
+                                "no-store",
+                            );
+                            req.into_response(
+                                500,
+                                Some("Internal Server Error"),
+                                &headers,
+                            )?
+                            .write_all(
+                                action_result_json(false, "Recorder unavailable.")
+                                    .as_bytes(),
+                            )?;
+                        })
+                    }
+                };
+                // Recorder lock is released — safe to call BLE now.
+                let scale_command_sent =
+                    needs_brew_start && shots_post_scale.start_manual_brew().is_ok();
+                let payload = format!(
+                    "{{\"ok\":true,\"already_active\":{},\"scale_command_sent\":{}}}",
+                    was_active,
+                    if scale_command_sent { "true" } else { "false" },
+                );
+                (200, Some("OK"), payload)
             }
             "save" => {
                 // Manually finalise whatever is currently recording.
@@ -1278,22 +1293,7 @@ pub fn start_station_http_server(
                 match shot {
                     Some(s) => {
                         let saved_id = match shots_post_store.lock() {
-                            Ok(mut store) => {
-                                // store.save() assigns the final id; read it back
-                                // via the mutated shot — we must save first.
-                                store.save(s)?;
-                                // next_id was bumped; the saved id is next_id - 1.
-                                // Instead, we re-read last summary to get the id.
-                                store
-                                    .list_summaries()
-                                    .ok()
-                                    .and_then(|mut v| {
-                                        v.sort_unstable_by(|a, b| b.id.cmp(&a.id));
-                                        v.into_iter().next()
-                                    })
-                                    .map(|s| s.id)
-                                    .unwrap_or(0)
-                            }
+                            Ok(mut store) => store.save(s)?,
                             Err(_) => return Err(anyhow!("shot store unavailable")),
                         };
                         let payload = format!(

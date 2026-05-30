@@ -12,7 +12,7 @@ use crate::shot_recorder::{ShotRecord, ShotSummary, MAX_SHOT_POINTS};
 /// (or any other backend) by replacing the concrete type passed to
 /// `setup_wifi_station`.
 pub trait ShotStore: Send {
-    fn save(&mut self, shot: ShotRecord) -> Result<()>;
+    fn save(&mut self, shot: ShotRecord) -> Result<u32>;
     fn list_summaries(&self) -> Result<Vec<ShotSummary>>;
     fn get_shot(&self, id: u32) -> Result<Option<ShotRecord>>;
     fn delete_shot(&mut self, id: u32) -> Result<bool>;
@@ -211,10 +211,11 @@ impl NvsShotStore {
 
 #[cfg(target_arch = "xtensa")]
 impl ShotStore for NvsShotStore {
-    fn save(&mut self, mut shot: ShotRecord) -> Result<()> {
+    fn save(&mut self, mut shot: ShotRecord) -> Result<u32> {
         // Assign a stable ID from the store's sequence, so IDs remain unique
         // even after the recorder resets its counter on reboot.
-        shot.id = self.next_id;
+        let assigned_id = self.next_id;
+        shot.id = assigned_id;
         self.next_id = self.next_id.wrapping_add(1).max(1);
 
         let blob = encode_shot(&shot);
@@ -229,11 +230,11 @@ impl ShotStore for NvsShotStore {
 
         println!(
             "[shots] Saved shot id={} ({} points) to slot {}",
-            shot.id,
+            assigned_id,
             shot.points.len(),
             (self.head + MAX_STORED_SHOTS - 1) % MAX_STORED_SHOTS
         );
-        Ok(())
+        Ok(assigned_id)
     }
 
     fn list_summaries(&self) -> Result<Vec<ShotSummary>> {
@@ -292,19 +293,20 @@ impl ShotStore for NvsShotStore {
                 if let Some(shot) = decode_shot(data) {
                     if shot.id == id {
                         // Zero out the slot (id=0 signals deleted in decode_shot).
+                        // Do NOT decrement count: the zeroed slot is simply skipped
+                        // during iteration via the id==0 sentinel.  Decrementing
+                        // would shift the ring's logical start and permanently hide
+                        // the oldest occupied slot.
                         nvs.set_blob(slot_key(slot), &[0u8; HEADER_LEN])?;
-                        if self.count > 0 {
-                            self.count -= 1;
-                        }
-                        self.save_metadata()?;
                         return Ok(true);
                     }
                 }
             }
         }
-        Err(anyhow!("Shot {} not found.", id))
+        Ok(false)
     }
 }
+
 
 // ---------------------------------------------------------------------------
 // Tests (host-side, no ESP-IDF required)
