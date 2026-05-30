@@ -1287,16 +1287,10 @@ pub fn start_station_http_server(
             }
             "save" => {
                 // Manually finalise whatever is currently recording.
-                let shot = match shots_post_recorder.lock() {
-                    Ok(mut rec) => rec.finalize(),
-                    Err(_) => None,
-                };
+                let shot = lock_or_recover(&shots_post_recorder).finalize();
                 match shot {
                     Some(s) => {
-                        let saved_id = match shots_post_store.lock() {
-                            Ok(mut store) => store.save(s)?,
-                            Err(_) => return Err(anyhow!("shot store unavailable")),
-                        };
+                        let saved_id = lock_or_recover(&shots_post_store).save(s)?;
                         let payload = format!(
                             "{{\"ok\":true,\"id\":{},\"message\":\"Shot saved.\"}}",
                             saved_id

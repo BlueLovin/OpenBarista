@@ -142,8 +142,11 @@
       (shot.points.length > 0
         ? Math.max(0, shot.points[shot.points.length - 1].weight_g - shot.points[0].weight_g).toFixed(1)
         : '0');
-    var avgTemp = shot.points.length > 0
-      ? shot.points.reduce(function (a, p) { return a + p.temperature_c; }, 0) / shot.points.length
+    var validTemps = shot.points.filter(function (p) {
+      return Number.isFinite(p.temperature_c) && p.temperature_c > 0;
+    });
+    var avgTemp = validTemps.length > 0
+      ? validTemps.reduce(function (a, p) { return a + p.temperature_c; }, 0) / validTemps.length
       : 0;
     document.getElementById('detailAvgTemp').textContent = avgTemp.toFixed(1);
 

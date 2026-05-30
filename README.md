@@ -117,7 +117,7 @@ OpenBarista includes BLE scale support on the ESP32 side.
 - The station dashboard shows live scale weight and estimated flow.
 - The settings page uses a simple pairing flow: Find Scales, tap the device, connect.
 - The firmware saves one preferred scale in NVS and attempts to reconnect it on boot.
-- Scales that support BooKoo commands get additional controls: manual brew start and flow smoothing toggle.
+- The **Start/Stop Extraction** button on the dashboard is always available for shot recording. When a BooKoo scale is connected, pressing it also sends the scale's brew-start command. A flow smoothing toggle appears when the scale supports it.
 - Compatibility is best-effort generic BLE plus a standards-based weight characteristic path; exact behavior still depends on the scale's protocol.
 
 ## Hardware Configuration

@@ -69,7 +69,7 @@ The history page shows all recorded shots stored on the device (up to 10; oldest
 
 ### List View
 
-- Sortable list of past shots with timestamp, duration, max pressure, yield, and avg temperature
+- List of past shots with timestamp, duration, max pressure, yield, and avg temperature
 - Summary analytics across all shots (avg duration, avg yield, avg max pressure, avg temp)
 
 ### Detail View
