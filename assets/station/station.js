@@ -29,6 +29,7 @@ let latestScaleWeightG = 0;
 let latestFlowGps = 0;
 let scaleConnected = false;
 let shotWeightZeroG = null;
+let shotSyncedFromFirmware = false; // true when recording was auto-detected by firmware
 
 let xs = [];
 let pressures = [];
@@ -271,7 +272,7 @@ function stopTimer() {
   }
 }
 
-function startShot() {
+function enterRecordingMode() {
   xs = [];
   pressures = [];
   flows = [];
@@ -297,15 +298,9 @@ function startShot() {
   if (peakBarEl) peakBarEl.textContent = "--";
   if (avgBarEl) avgBarEl.textContent = "--";
   startTimer();
-  // Tell the backend to start recording regardless of pressure.
-  fetch('/api/shots', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: 'action=start',
-  }).catch(function () { /* ignore network errors */ });
 }
 
-function stopShot() {
+function exitRecordingMode() {
   shotActive = false;
   shotStartMs = null;
   shotWeightZeroG = null;
@@ -317,6 +312,21 @@ function stopShot() {
     startBtn.textContent = "START EXTRACTION";
     delete startBtn.dataset.active;
   }
+}
+
+function startShot() {
+  enterRecordingMode();
+  // Tell the backend to start recording regardless of pressure.
+  fetch('/api/shots', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'action=start',
+  }).catch(function () { /* ignore network errors */ });
+}
+
+function stopShot() {
+  shotSyncedFromFirmware = false;
+  exitRecordingMode();
   // Save the shot server-side and show a toast with a link.
   fetch('/api/shots', {
     method: 'POST',
@@ -421,6 +431,18 @@ async function poll() {
 
     if (d.seq === lastSeq) return;
     lastSeq = d.seq;
+
+    // Sync recording indicator with firmware truth.
+    if (d.recording_active && !shotActive) {
+      // Firmware auto-detected a shot — enter recording mode without POSTing.
+      shotSyncedFromFirmware = true;
+      enterRecordingMode();
+    } else if (!d.recording_active && shotActive && shotSyncedFromFirmware) {
+      // Auto-detected shot ended and firmware saved it — clear UI and show link.
+      shotSyncedFromFirmware = false;
+      exitRecordingMode();
+      showToast('Shot saved! <a href="/history">View history \u2192</a>');
+    }
 
     let t;
     if (shotActive) {

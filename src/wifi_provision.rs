@@ -1049,6 +1049,7 @@ pub fn start_station_http_server(
             snapshot.scale_connected,
             snapshot.weight_g,
             snapshot.flow_gps,
+            snapshot.recording_active,
         );
         let headers = response_headers("application/json; charset=utf-8", "no-store");
         req.into_response(200, Some("OK"), &headers)?
@@ -1643,6 +1644,7 @@ fn telemetry_json(
     scale_connected: bool,
     weight_g: f32,
     flow_gps: f32,
+    recording_active: bool,
 ) -> String {
     let temperature_c = sanitize_telemetry_value(temperature_c);
     let pressure_bar = sanitize_telemetry_value(pressure_bar);
@@ -1651,7 +1653,7 @@ fn telemetry_json(
     let flow_gps = sanitize_telemetry_value(flow_gps);
 
     format!(
-        "{{\"seq\":{},\"temperature_c\":{:.3},\"pressure_bar\":{:.3},\"pressure_psi\":{:.3},\"scale_connected\":{},\"weight_g\":{:.3},\"flow_gps\":{:.3}}}",
+        "{{\"seq\":{},\"temperature_c\":{:.3},\"pressure_bar\":{:.3},\"pressure_psi\":{:.3},\"scale_connected\":{},\"weight_g\":{:.3},\"flow_gps\":{:.3},\"recording_active\":{}}}",
         seq,
         temperature_c,
         pressure_bar,
@@ -1659,6 +1661,7 @@ fn telemetry_json(
         if scale_connected { "true" } else { "false" },
         weight_g,
         flow_gps,
+        if recording_active { "true" } else { "false" },
     )
 }
 

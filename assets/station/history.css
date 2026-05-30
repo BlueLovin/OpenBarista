@@ -95,6 +95,13 @@
   cursor: pointer;
   transition: background 0.15s, border-color 0.15s, transform 0.1s;
   border: 1px solid var(--line);
+  text-decoration: none;
+  color: inherit;
+  outline: none;
+}
+
+.shot-card:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent, #ff7a2f);
 }
 
 .shot-card:hover {

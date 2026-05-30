@@ -27,6 +27,7 @@ use esp_idf_hal::units::FromValueType;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use openbarista::shot_recorder::ShotRecorder;
 use openbarista::shot_store::NvsShotStore;
+use openbarista::sync_utils::lock_or_recover;
 use openbarista::telemetry_feed::SharedTelemetry;
 
 use crate::sensors::pressure::PressureSensor;
@@ -135,18 +136,12 @@ fn main() -> Result<()> {
         let snapshot = telemetry.snapshot();
         let unix_ts = get_unix_timestamp();
 
-        if let Ok(mut rec) = shot_recorder.lock() {
-            if let Some(shot) = rec.update(&snapshot, unix_ts) {
-                match shot_store.lock() {
-                    Ok(mut store) => {
-                        if let Err(e) = store.save(shot) {
-                            println!("[shots] Failed to save shot: {e:#}");
-                        }
-                    }
-                    Err(e) => println!("[shots] Store lock poisoned: {e}"),
-                }
+        if let Some(shot) = lock_or_recover(&shot_recorder).update(&snapshot, unix_ts) {
+            if let Err(e) = lock_or_recover(&shot_store).save(shot) {
+                println!("[shots] Failed to save shot: {e:#}");
             }
         }
+        telemetry.update_recording_active(lock_or_recover(&shot_recorder).is_active());
 
         FreeRtos::delay_ms(50);
     }

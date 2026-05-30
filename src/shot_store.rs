@@ -39,7 +39,9 @@ pub type SharedShotStore = Arc<Mutex<dyn ShotStore + Send>>;
 //     flow        : u16   (2)   – g/s × 100,      range 0–655
 //
 // Max bytes: 20 + 200×10 = 2020 bytes per shot.
-// 10 shots ≈ 20 KB (fits comfortably in the default NVS partition).
+// 10 shots ≈ 20 KB of payload, plus NVS page headers and existing namespaces.
+// The default NVS partition (24 KB) may be tight; a custom partition table is
+// recommended for production to give shots their own namespace space.
 
 const HEADER_LEN: usize = 20;
 const POINT_LEN: usize = 10;

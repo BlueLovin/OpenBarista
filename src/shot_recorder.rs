@@ -172,6 +172,7 @@ impl ShotRecorder {
             scale_connected: false,
             weight_g: 0.0,
             flow_gps: 0.0,
+            recording_active: false,
         };
         Self {
             pre_buf: vec![empty; PRE_SHOT_BUFFER_LEN],
@@ -467,6 +468,7 @@ mod tests {
             scale_connected: false,
             weight_g: 0.0,
             flow_gps: 0.0,
+            recording_active: false,
         }
     }
 

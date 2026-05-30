@@ -11,6 +11,7 @@ pub struct TelemetrySnapshot {
     pub scale_connected: bool,
     pub weight_g: f32,
     pub flow_gps: f32,
+    pub recording_active: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -29,6 +30,7 @@ impl SharedTelemetry {
                 scale_connected: false,
                 weight_g: 0.0,
                 flow_gps: 0.0,
+                recording_active: false,
             })),
         }
     }
@@ -59,6 +61,11 @@ impl SharedTelemetry {
         state.scale_connected = false;
         state.weight_g = 0.0;
         state.flow_gps = 0.0;
+    }
+
+    pub fn update_recording_active(&self, active: bool) {
+        let mut state = lock_or_recover(&self.inner);
+        state.recording_active = active;
     }
 
     pub fn snapshot(&self) -> TelemetrySnapshot {
@@ -153,6 +160,7 @@ mod tests {
             scale_connected: true,
             weight_g: 42.0,
             flow_gps: 3.1,
+            recording_active: false,
         }));
 
         let state_for_panic = Arc::clone(&state);

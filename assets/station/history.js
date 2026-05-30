@@ -81,8 +81,9 @@
     document.getElementById('avgTemp').textContent = (totalTemp / n).toFixed(1) + '°C';
 
     shots.forEach(function (shot) {
-      var card = document.createElement('div');
+      var card = document.createElement('a');
       card.className = 'shot-card';
+      card.href = '/history?id=' + shot.id;
       card.setAttribute('role', 'listitem');
       card.innerHTML =
         '<span class="shot-card-ts">' + formatTimestamp(shot.unix_timestamp) + '</span>' +
@@ -93,10 +94,6 @@
           metric('Avg temp', shot.avg_temperature_c.toFixed(1) + '°C') +
         '</div>' +
         '<span class="shot-card-chevron" aria-hidden="true">&#8250;</span>';
-
-      card.addEventListener('click', function () {
-        window.location.href = '/history?id=' + shot.id;
-      });
 
       listEl.appendChild(card);
     });
