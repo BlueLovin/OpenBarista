@@ -129,6 +129,11 @@ pub struct ShotSummary {
 
 enum RecorderState {
     Idle,
+    /// Entered after a manual `finalize()` while the signal is still above the
+    /// auto-start threshold.  Auto-detection is suppressed until pressure/
+    /// temperature drop below the threshold, preventing an immediate re-start
+    /// of a new shot when the user presses Stop mid-extraction.
+    Cooldown,
     Recording {
         points: Vec<ShotPoint>,
         tick_count: u32,
@@ -231,6 +236,16 @@ impl ShotRecorder {
                 None
             }
 
+            // Suppress auto-detection until signal drops below threshold.
+            RecorderState::Cooldown => {
+                if !above_threshold {
+                    self.state = RecorderState::Idle;
+                } else {
+                    self.state = RecorderState::Cooldown;
+                }
+                None
+            }
+
             RecorderState::Recording {
                 mut points,
                 tick_count,
@@ -327,7 +342,10 @@ impl ShotRecorder {
     ///
     /// Returns `None` if there is nothing in progress.
     pub fn finalize(&mut self) -> Option<ShotRecord> {
-        let current = std::mem::replace(&mut self.state, RecorderState::Idle);
+        // Replace with Cooldown to suppress auto-restart if signal is still
+        // above threshold when the user manually stops.  Corrected to Idle
+        // below if nothing was actually recording.
+        let current = std::mem::replace(&mut self.state, RecorderState::Cooldown);
         match current {
             RecorderState::Recording {
                 points,
@@ -342,6 +360,7 @@ impl ShotRecorder {
                 ..
             } => {
                 if points.is_empty() {
+                    self.state = RecorderState::Idle;
                     None
                 } else {
                     Some(ShotRecord {
@@ -351,13 +370,22 @@ impl ShotRecorder {
                     })
                 }
             }
-            RecorderState::Idle => None,
+            // Nothing was recording — no need for cooldown.
+            RecorderState::Idle | RecorderState::Cooldown => {
+                self.state = RecorderState::Idle;
+                None
+            }
         }
     }
 
     /// Returns `true` if a shot is currently being recorded or debouncing.
     pub fn is_active(&self) -> bool {
-        !matches!(self.state, RecorderState::Idle)
+        // Cooldown is intentionally excluded: the shot has been finalised and
+        // the UI should show idle even while auto-detection is suppressed.
+        matches!(
+            self.state,
+            RecorderState::Recording { .. } | RecorderState::Debouncing { .. }
+        )
     }
 
     /// Manually starts recording regardless of current pressure.

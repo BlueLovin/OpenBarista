@@ -463,7 +463,7 @@ async function poll() {
       // Firmware ended the shot (pressure drop / auto-finalize) — clear UI.
       shotSyncedFromFirmware = false;
       exitRecordingMode();
-      showToast('Shot saved! <a href="/history">View history \u2192</a>');
+      showToast('Shot ended — <a href="/history">view history \u2192</a>');
     }
 
     let t;
