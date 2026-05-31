@@ -33,11 +33,20 @@ use openbarista::telemetry_feed::SharedTelemetry;
 use crate::sensors::pressure::PressureSensor;
 use crate::sensors::temperature::Max31865;
 
+// Minimum plausible wall-clock timestamp (2020-01-01T00:00:00Z).
+// Before SNTP syncs the RTC, SystemTime::now() on the ESP32 returns the
+// device uptime in seconds (a few hundred at most), which looks like a date
+// in early 1970 in the history UI.  Any timestamp below this sentinel is
+// treated as "unsynced" and clamped to 0 so the UI shows "Unknown time"
+// rather than a nonsensical 1970 date.
+const MIN_PLAUSIBLE_UNIX_TS: u64 = 1_577_836_800; // 2020-01-01
+
 fn get_unix_timestamp() -> u64 {
-    SystemTime::now()
+    let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
-        .unwrap_or(0)
+        .unwrap_or(0);
+    if ts < MIN_PLAUSIBLE_UNIX_TS { 0 } else { ts }
 }
 
 fn main() -> Result<()> {

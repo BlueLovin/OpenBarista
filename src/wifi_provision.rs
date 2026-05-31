@@ -1235,10 +1235,16 @@ pub fn start_station_http_server(
         let (status_code, reason_phrase, payload) = match action.as_str() {
             "start" => {
                 // Manually start a shot regardless of current pressure.
-                let unix_ts = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
+                // Clamp to 0 if SNTP hasn't synced yet — before sync the ESP32
+                // clock returns uptime seconds which look like 1970 dates in the UI.
+                // 1_577_836_800 = 2020-01-01T00:00:00Z (minimum plausible timestamp).
+                let unix_ts = {
+                    let ts = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    if ts < 1_577_836_800 { 0 } else { ts }
+                };
                 // Hold the recorder lock only long enough to call force_start,
                 // then release it before issuing the BLE command.  The 50 ms
                 // sensor loop shares this mutex, so keeping it locked across a

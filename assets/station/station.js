@@ -29,7 +29,13 @@ let latestScaleWeightG = 0;
 let latestFlowGps = 0;
 let scaleConnected = false;
 let shotWeightZeroG = null;
-let shotSyncedFromFirmware = false; // true when recording was auto-detected by firmware
+// Two-phase firmware-sync flag.  startPostSucceeded is set when the
+// action=start POST resolves; shotSyncedFromFirmware is only set once
+// telemetry subsequently confirms recording_active=true.  This prevents
+// a stale recording_active=false poll (arriving between the POST resolving
+// and the firmware actually starting) from immediately clearing the UI.
+let shotSyncedFromFirmware = false;
+let startPostSucceeded = false;
 
 let xs = [];
 let pressures = [];
@@ -315,21 +321,25 @@ function exitRecordingMode() {
 }
 
 function startShot() {
+  startPostSucceeded = false;
   enterRecordingMode();
   // Tell the backend to start recording regardless of pressure.
-  // Mark as firmware-synced once the request lands so that a pressure-drop
-  // finalization by the firmware (before the user presses Stop) clears the UI.
   fetch('/api/shots', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: 'action=start',
   })
-    .then(function () { shotSyncedFromFirmware = true; })
+    // Don't set shotSyncedFromFirmware here — the next telemetry poll may
+    // still carry a stale recording_active=false snapshot and would
+    // immediately clear the UI.  Instead, set startPostSucceeded and let
+    // poll() arm shotSyncedFromFirmware once it sees recording_active=true.
+    .then(function () { startPostSucceeded = true; })
     .catch(function () { /* ignore network errors */ });
 }
 
 function stopShot() {
   shotSyncedFromFirmware = false;
+  startPostSucceeded = false;
   exitRecordingMode();
   // Save the shot server-side and show a toast with a link.
   fetch('/api/shots', {
@@ -441,9 +451,17 @@ async function poll() {
       // Firmware auto-detected a shot — enter recording mode without POSTing.
       shotSyncedFromFirmware = true;
       enterRecordingMode();
+    } else if (d.recording_active && shotActive && startPostSucceeded && !shotSyncedFromFirmware) {
+      // POST already succeeded AND telemetry now confirms the firmware is
+      // recording — safe to arm firmware-end detection.  Doing this here
+      // (rather than in the .then() callback) avoids a race where a stale
+      // recording_active=false snapshot arrives before the firmware has
+      // actually started and immediately clears the UI.
+      shotSyncedFromFirmware = true;
     } else if (!d.recording_active && shotActive && shotSyncedFromFirmware) {
-      // Auto-detected shot ended and firmware saved it — clear UI and show link.
+      // Firmware ended the shot (pressure drop / auto-finalize) — clear UI.
       shotSyncedFromFirmware = false;
+      startPostSucceeded = false;
       exitRecordingMode();
       showToast('Shot saved! <a href="/history">View history \u2192</a>');
     }
