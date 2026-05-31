@@ -34,6 +34,7 @@ All telemetry is displayed on a live web dashboard served by the ESP32 itself �
 - [**Toolchain Setup**]({{ site.baseurl }}/setup/) — Installing the Rust + ESP-IDF build environment
 - [**Building & Flashing**]({{ site.baseurl }}/flashing/) — Compiling and loading firmware
 - [**Web Dashboard**]({{ site.baseurl }}/dashboard/) — Using the on-device UI
+- [**Shot History**]({{ site.baseurl }}/dashboard/#shot-history) — Browsing and replaying past shots
 - [**Bluetooth Scale**]({{ site.baseurl }}/scale/) — Pairing and using a BLE scale
 
 ---
@@ -59,8 +60,9 @@ OpenBarista is firmware-first. It currently includes:
 - BLE scale scanning, pairing, live weight and flow telemetry
 - Shared in-memory telemetry feed
 - Wi-Fi provisioning with captive portal fallback
-- Station-mode dashboard and settings pages
-- Persistent Wi-Fi and device settings in ESP NVS
+- Station-mode dashboard, settings, and shot history pages
+- Automatic shot detection and NVS-backed shot history (up to 10 shots)
+- Persistent Wi-Fi, device settings, and shot data in ESP NVS
 - Build metadata and stable board identity
 
 No desktop app or cloud backend is required.

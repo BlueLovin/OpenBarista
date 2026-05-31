@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{
     io::ErrorKind,
     net::{Ipv4Addr as StdIpv4Addr, UdpSocket},
@@ -31,6 +31,8 @@ use crate::{
     scale_ble::{SavedScale, ScaleRuntime},
     web_assets,
 };
+use openbarista::shot_recorder::SharedShotRecorder;
+use openbarista::shot_store::SharedShotStore;
 use openbarista::telemetry_feed::SharedTelemetry;
 
 const NVS_NAMESPACE: &str = "wifi";
@@ -337,6 +339,8 @@ pub struct WifiRuntime {
     pub stack: WifiStack,
     pub station_http_server: EspHttpServer<'static>,
     temperature_offset_c: Arc<Mutex<f32>>,
+    /// Kept alive here so NTP continues syncing for the device lifetime.
+    _sntp: Option<esp_idf_svc::sntp::EspSntp<'static>>,
 }
 
 impl WifiRuntime {
@@ -376,6 +380,8 @@ pub fn setup_wifi<M>(
     nvs_partition: EspDefaultNvsPartition,
     telemetry: SharedTelemetry,
     scale_runtime: Arc<ScaleRuntime>,
+    shot_store: SharedShotStore,
+    shot_recorder: SharedShotRecorder,
 ) -> Result<WifiRuntime, anyhow::Error>
 where
     M: WifiModemPeripheral + 'static,
@@ -529,6 +535,13 @@ where
                 #[cfg(any(esp_idf_comp_mdns_enabled, esp_idf_comp_espressif__mdns_enabled))]
                 mdns: start_mdns()?,
             };
+            let sntp = esp_idf_svc::sntp::EspSntp::new_default().ok();
+            if sntp.is_some() {
+                println!("[ntp] SNTP client started.");
+            } else {
+                println!("[ntp] SNTP client failed to start; timestamps will be 0.");
+            }
+
             let station_http_server = start_station_http_server(
                 &ip_addr,
                 telemetry,
@@ -536,12 +549,15 @@ where
                 wifi,
                 temperature_offset_c.clone(),
                 scale_runtime.clone(),
+                shot_store,
+                shot_recorder,
             )?;
 
             let runtime = WifiRuntime {
                 stack,
                 station_http_server,
                 temperature_offset_c,
+                _sntp: sntp,
             };
             runtime.log_keepalive_state();
             return Ok(runtime);
@@ -946,6 +962,8 @@ pub fn start_station_http_server(
     _wifi: Arc<Mutex<BlockingWifi<EspWifi<'static>>>>,
     temperature_offset_c: Arc<Mutex<f32>>,
     scale_runtime: Arc<ScaleRuntime>,
+    shot_store: SharedShotStore,
+    shot_recorder: SharedShotRecorder,
 ) -> Result<EspHttpServer<'static>> {
     let saved_scale = read_saved_scale(&nvs_partition)?;
     scale_runtime.apply_saved_scale(saved_scale);
@@ -957,6 +975,7 @@ pub fn start_station_http_server(
     let board_id_value = board_id();
     let html = web_assets::station_index_html(ip_addr, &build_id_value, &board_id_value);
     let settings_html = web_assets::settings_index_html(ip_addr, &build_id_value, &board_id_value);
+    let history_html = web_assets::history_index_html(ip_addr, &build_id_value, &board_id_value);
     let mut server = EspHttpServer::new(&HttpConfig::default())?;
 
     server.fn_handler("/", Method::Get, move |req| {
@@ -990,7 +1009,14 @@ pub fn start_station_http_server(
         Ok::<_, anyhow::Error>(())
     })?;
 
-    let static_routes: [(&str, fn() -> web_assets::StaticAsset); 7] = [
+    server.fn_handler("/history", Method::Get, move |req| {
+        let headers = station_response_headers("text/html; charset=utf-8", "no-store");
+        req.into_response(200, Some("OK"), &headers)?
+            .write_all(history_html.as_bytes())?;
+        Ok::<_, anyhow::Error>(())
+    })?;
+
+    let static_routes: [(&str, fn() -> web_assets::StaticAsset); 9] = [
         ("/base.css", web_assets::base_css),
         ("/station.css", web_assets::station_css),
         ("/station.js", web_assets::station_js),
@@ -998,6 +1024,8 @@ pub fn start_station_http_server(
         ("/settings.js", web_assets::settings_js),
         ("/uplot.min.js", web_assets::uplot_js),
         ("/uplot.min.css", web_assets::uplot_css),
+        ("/history.js", web_assets::history_js),
+        ("/history.css", web_assets::history_css),
     ];
 
     for (path, asset_fn) in static_routes {
@@ -1021,6 +1049,7 @@ pub fn start_station_http_server(
             snapshot.scale_connected,
             snapshot.weight_g,
             snapshot.flow_gps,
+            snapshot.recording_active,
         );
         let headers = response_headers("application/json; charset=utf-8", "no-store");
         req.into_response(200, Some("OK"), &headers)?
@@ -1101,6 +1130,8 @@ pub fn start_station_http_server(
                 scale_for_post.connect_address(&saved_scale.address)
             }
             "disconnect" => scale_for_post.disconnect().map(str::to_owned),
+            "flow_smoothing_on" => scale_for_post.set_flow_smoothing(true),
+            "flow_smoothing_off" => scale_for_post.set_flow_smoothing(false),
             "forget" => {
                 clear_saved_scale(&nvs_for_scale_post)?;
                 scale_for_post.forget_saved_scale();
@@ -1113,6 +1144,180 @@ pub fn start_station_http_server(
         let (status_code, reason_phrase, payload) = match result {
             Ok(message) => (200, Some("OK"), action_result_json(true, &message)),
             Err(err) => (400, None, action_result_json(false, &err.to_string())),
+        };
+
+        let headers = response_headers("application/json; charset=utf-8", "no-store");
+        req.into_response(status_code, reason_phrase, &headers)?
+            .write_all(payload.as_bytes())?;
+        Ok::<_, anyhow::Error>(())
+    })?;
+
+    // ── Shot history API ────────────────────────────────────────────────────
+
+    let shots_list_store = shot_store.clone();
+    server.fn_handler("/api/shots", Method::Get, move |req| {
+        let summaries = lock_or_recover(&shots_list_store).list_summaries()?;
+        let payload = serde_json::to_string(&summaries).unwrap_or_else(|_| "[]".to_owned());
+        let headers = response_headers("application/json; charset=utf-8", "no-store");
+        req.into_response(200, Some("OK"), &headers)?
+            .write_all(payload.as_bytes())?;
+        Ok::<_, anyhow::Error>(())
+    })?;
+
+    let shots_detail_store = shot_store.clone();
+    server.fn_handler("/api/shot", Method::Get, move |req| {
+        // Parse ?id=N from the URI.
+        let uri = req.uri();
+        let id_str = uri
+            .split_once('?')
+            .and_then(|(_, qs)| {
+                form_urlencoded::parse(qs.as_bytes())
+                    .find(|(k, _)| k == "id")
+                    .map(|(_, v)| v.into_owned())
+            })
+            .unwrap_or_default();
+
+        let id: u32 = match id_str.parse() {
+            Ok(v) => v,
+            Err(_) => {
+                let headers = response_headers("application/json; charset=utf-8", "no-store");
+                req.into_response(400, Some("Bad Request"), &headers)?
+                    .write_all(b"{\"error\":\"missing or invalid id\"}")?;
+                return Ok::<_, anyhow::Error>(());
+            }
+        };
+
+        let shot = lock_or_recover(&shots_detail_store).get_shot(id)?;
+
+        match shot {
+            Some(s) => {
+                let payload = serde_json::to_string(&s).unwrap_or_else(|_| "{}".to_owned());
+                let headers = response_headers("application/json; charset=utf-8", "no-store");
+                req.into_response(200, Some("OK"), &headers)?
+                    .write_all(payload.as_bytes())?;
+            }
+            None => {
+                let headers = response_headers("application/json; charset=utf-8", "no-store");
+                req.into_response(404, Some("Not Found"), &headers)?
+                    .write_all(b"{\"error\":\"shot not found\"}")?;
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })?;
+
+    let shots_post_store = shot_store.clone();
+    let shots_post_recorder = shot_recorder.clone();
+    let shots_post_scale = scale_runtime.clone();
+    server.fn_handler("/api/shots", Method::Post, move |mut req| {
+        let max_body_len = 128usize;
+        let body_str = match read_request_body_utf8(&mut req, max_body_len) {
+            Ok(body) => body,
+            Err(RequestBodyError::TooLarge) => {
+                let headers = response_headers("application/json; charset=utf-8", "no-store");
+                req.into_response(413, Some("Payload Too Large"), &headers)?
+                    .write_all(action_result_json(false, "Request body too large.").as_bytes())?;
+                return Ok::<_, anyhow::Error>(());
+            }
+            Err(RequestBodyError::InvalidUtf8) => {
+                let headers = response_headers("application/json; charset=utf-8", "no-store");
+                req.into_response(400, Some("Bad Request"), &headers)?
+                    .write_all(action_result_json(false, "Invalid UTF-8.").as_bytes())?;
+                return Ok::<_, anyhow::Error>(());
+            }
+            Err(RequestBodyError::Io(err)) => return Err(err),
+        };
+
+        let action = parse_form_field(&body_str, "action")
+            .unwrap_or_default()
+            .trim()
+            .to_owned();
+
+        let (status_code, reason_phrase, payload) = match action.as_str() {
+            "start" => {
+                // Manually start a shot regardless of current pressure.
+                // Clamp to 0 if SNTP hasn't synced yet — before sync the ESP32
+                // clock returns uptime seconds which look like 1970 dates in the UI.
+                // 1_577_836_800 = 2020-01-01T00:00:00Z (minimum plausible timestamp).
+                let unix_ts = {
+                    let ts = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    if ts < 1_577_836_800 { 0 } else { ts }
+                };
+                // Hold the recorder lock only long enough to call force_start,
+                // then release it before issuing the BLE command.  The 50 ms
+                // sensor loop shares this mutex, so keeping it locked across a
+                // potentially slow BLE write would stall recording.
+                // lock_or_recover follows the repo-wide shared-mutex convention
+                // (see sync_utils.rs): recover from poison so manual starts
+                // remain functional even if another thread previously panicked.
+                let (was_active, needs_brew_start) = {
+                    let mut rec = lock_or_recover(&shots_post_recorder);
+                    let was_active = rec.is_active();
+                    rec.force_start(unix_ts);
+                    let needs = !was_active
+                        && shots_post_scale.snapshot().supports_manual_brew_start;
+                    (was_active, needs)
+                };
+                // Recorder lock is released — safe to call BLE now.
+                let scale_command_sent =
+                    needs_brew_start && shots_post_scale.start_manual_brew().is_ok();
+                let payload = format!(
+                    "{{\"ok\":true,\"already_active\":{},\"scale_command_sent\":{}}}",
+                    was_active,
+                    if scale_command_sent { "true" } else { "false" },
+                );
+                (200, Some("OK"), payload)
+            }
+            "save" => {
+                // Manually finalise whatever is currently recording.
+                let shot = lock_or_recover(&shots_post_recorder).finalize();
+                match shot {
+                    Some(s) => {
+                        let saved_id = lock_or_recover(&shots_post_store).save(s)?;
+                        let payload = format!(
+                            "{{\"ok\":true,\"id\":{},\"message\":\"Shot saved.\"}}",
+                            saved_id
+                        );
+                        (200, Some("OK"), payload)
+                    }
+                    None => (
+                        200,
+                        Some("OK"),
+                        action_result_json(false, "No shot in progress."),
+                    ),
+                }
+            }
+            "delete" => {
+                let id_str = parse_form_field(&body_str, "id").unwrap_or_default();
+                let id: u32 = match id_str.trim().parse() {
+                    Ok(v) => v,
+                    Err(_) => {
+                        let headers =
+                            response_headers("application/json; charset=utf-8", "no-store");
+                        req.into_response(400, Some("Bad Request"), &headers)?
+                            .write_all(
+                                action_result_json(false, "Missing or invalid id.").as_bytes(),
+                            )?;
+                        return Ok::<_, anyhow::Error>(());
+                    }
+                };
+                match { let mut store = lock_or_recover(&shots_post_store); store.delete_shot(id) } {
+                        Ok(true) => (200, Some("OK"), action_result_json(true, "Shot deleted.")),
+                        Ok(false) => (
+                            404,
+                            Some("Not Found"),
+                            action_result_json(false, "Shot not found."),
+                        ),
+                        Err(e) => (400, None, action_result_json(false, &e.to_string())),
+                }
+            }
+            _ => (
+                400,
+                Some("Bad Request"),
+                action_result_json(false, "Unsupported action."),
+            ),
         };
 
         let headers = response_headers("application/json; charset=utf-8", "no-store");
@@ -1415,6 +1620,7 @@ fn telemetry_json(
     scale_connected: bool,
     weight_g: f32,
     flow_gps: f32,
+    recording_active: bool,
 ) -> String {
     let temperature_c = sanitize_telemetry_value(temperature_c);
     let pressure_bar = sanitize_telemetry_value(pressure_bar);
@@ -1423,7 +1629,7 @@ fn telemetry_json(
     let flow_gps = sanitize_telemetry_value(flow_gps);
 
     format!(
-        "{{\"seq\":{},\"temperature_c\":{:.3},\"pressure_bar\":{:.3},\"pressure_psi\":{:.3},\"scale_connected\":{},\"weight_g\":{:.3},\"flow_gps\":{:.3}}}",
+        "{{\"seq\":{},\"temperature_c\":{:.3},\"pressure_bar\":{:.3},\"pressure_psi\":{:.3},\"scale_connected\":{},\"weight_g\":{:.3},\"flow_gps\":{:.3},\"recording_active\":{}}}",
         seq,
         temperature_c,
         pressure_bar,
@@ -1431,6 +1637,7 @@ fn telemetry_json(
         if scale_connected { "true" } else { "false" },
         weight_g,
         flow_gps,
+        if recording_active { "true" } else { "false" },
     )
 }
 
@@ -1478,7 +1685,7 @@ fn scale_status_json(snapshot: &crate::scale_ble::ScaleStatusSnapshot) -> String
         .unwrap_or_else(|| "null".to_owned());
 
     format!(
-        "{{\"available\":{},\"state\":\"{}\",\"message\":\"{}\",\"connected_name\":\"{}\",\"connected_address\":\"{}\",\"protocol\":\"{}\",\"weight_g\":{:.3},\"flow_gps\":{:.3},\"battery_percent\":{},\"saved_scale\":{},\"devices\":{}}}",
+        "{{\"available\":{},\"state\":\"{}\",\"message\":\"{}\",\"connected_name\":\"{}\",\"connected_address\":\"{}\",\"protocol\":\"{}\",\"weight_g\":{:.3},\"flow_gps\":{:.3},\"battery_percent\":{},\"supports_manual_brew_start\":{},\"supports_flow_smoothing\":{},\"saved_scale\":{},\"devices\":{}}}",
         if snapshot.available { "true" } else { "false" },
         json_escape(&snapshot.state),
         json_escape(&snapshot.message),
@@ -1488,6 +1695,8 @@ fn scale_status_json(snapshot: &crate::scale_ble::ScaleStatusSnapshot) -> String
         sanitize_telemetry_value(snapshot.weight_g),
         sanitize_telemetry_value(snapshot.flow_gps),
         battery_json,
+        if snapshot.supports_manual_brew_start { "true" } else { "false" },
+        if snapshot.supports_flow_smoothing { "true" } else { "false" },
         saved_scale,
         devices_json,
     )

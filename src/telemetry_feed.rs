@@ -11,6 +11,7 @@ pub struct TelemetrySnapshot {
     pub scale_connected: bool,
     pub weight_g: f32,
     pub flow_gps: f32,
+    pub recording_active: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -29,6 +30,7 @@ impl SharedTelemetry {
                 scale_connected: false,
                 weight_g: 0.0,
                 flow_gps: 0.0,
+                recording_active: false,
             })),
         }
     }
@@ -59,6 +61,17 @@ impl SharedTelemetry {
         state.scale_connected = false;
         state.weight_g = 0.0;
         state.flow_gps = 0.0;
+    }
+
+    pub fn update_recording_active(&self, active: bool) {
+        let mut state = lock_or_recover(&self.inner);
+        // Only bump seq when the value actually changes — the JS poller skips
+        // snapshots whose seq is unchanged, so a silent write would make
+        // recording-state transitions invisible to connected clients.
+        if state.recording_active != active {
+            state.seq = state.seq.wrapping_add(1);
+            state.recording_active = active;
+        }
     }
 
     pub fn snapshot(&self) -> TelemetrySnapshot {
@@ -153,6 +166,7 @@ mod tests {
             scale_connected: true,
             weight_g: 42.0,
             flow_gps: 3.1,
+            recording_active: false,
         }));
 
         let state_for_panic = Arc::clone(&state);

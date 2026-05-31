@@ -33,6 +33,10 @@
         </div>
         <div class="topbar-right">
           <a class="settings-link" href="/settings">Settings</a>
+          <div id="shotIndicator" class="shot-indicator" hidden aria-live="polite">
+            <span class="shot-indicator-dot" aria-hidden="true">&#9679;</span>
+            Recording&#160;<span id="shotTimerIndicator">00:00</span>
+          </div>
           <span id="telemetryStatus" class="badge">Connecting...</span>
         </div>
       </header>
@@ -146,7 +150,7 @@
           <span class="nav-icon" aria-hidden="true">&#9789;</span>
           <span>Brew</span>
         </a>
-        <a class="nav-item" href="#">
+        <a class="nav-item" href="/history">
           <span class="nav-icon" aria-hidden="true">&#9716;</span>
           <span>History</span>
         </a>

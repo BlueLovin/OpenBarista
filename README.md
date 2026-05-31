@@ -20,8 +20,10 @@ This repository is firmware-first and currently includes:
 - BLE scale scanning, saved pairing, and live weight / flow telemetry
 - Shared in-memory telemetry feed
 - Wi-Fi provisioning flow with captive portal fallback
-- Station-mode dashboard and settings pages
-- Persistent Wi-Fi and device settings in ESP NVS
+- Station-mode dashboard, settings, and shot history pages
+- Automatic shot detection and recording (pressure ≥ 0.5 bar, temperature ≥ 70 °C)
+- NVS-backed shot persistence with per-shot chart data, summaries, and delete
+- Persistent Wi-Fi, device settings, and shot history in ESP NVS
 - Build metadata and stable board identity in the UI
 
 ## Runtime Behavior
@@ -70,12 +72,16 @@ The UI assets are embedded from `assets/` at compile time via `include_bytes!` /
 
 - `GET /` -> station dashboard
 - `GET /settings` -> device settings page
+- `GET /history` -> shot history page
 - `GET /health` -> plain `ok`
 - `GET /api/telemetry` -> latest telemetry snapshot JSON
 - `GET /api/scale` -> scale status, saved pairing, and discovered devices JSON
 - `GET /api/settings` -> current device settings JSON
+- `GET /api/shots` -> list of shot summaries (newest first)
+- `GET /api/shot?id=N` -> full point data for a single shot
 - `POST /api/scale` -> scale scan / connect / disconnect / forget actions
 - `POST /api/settings` -> update settings (and optionally Wi-Fi credentials)
+- `POST /api/shots` -> shot actions: `start`, `save`, `delete`
 - `GET /networks` -> known/safe network list for UI flow
 
 ### Provisioning routes
@@ -93,6 +99,7 @@ Settings are stored in ESP NVS:
 - Namespace `wifi`: SSID and password
 - Namespace `settings`: device label and temperature offset
 - Namespace `scale`: one saved BLE scale address, name, and address type
+- Namespace `shots`: shot ring-buffer metadata and up to 10 shot blobs
 
 Current settings API supports:
 
@@ -105,11 +112,12 @@ Wi-Fi updates trigger a reboot to apply network changes.
 
 ## Bluetooth Scale Support
 
-OpenBarista now includes BLE-only scale support on the ESP32 side.
+OpenBarista includes BLE scale support on the ESP32 side.
 
 - The station dashboard shows live scale weight and estimated flow.
 - The settings page uses a simple pairing flow: Find Scales, tap the device, connect.
 - The firmware saves one preferred scale in NVS and attempts to reconnect it on boot.
+- The **Start/Stop Extraction** button on the dashboard is always available for shot recording. When a BooKoo scale is connected, pressing it also sends the scale's brew-start command. A flow smoothing toggle appears when the scale supports it.
 - Compatibility is best-effort generic BLE plus a standards-based weight characteristic path; exact behavior still depends on the scale's protocol.
 
 ## Hardware Configuration
@@ -297,10 +305,18 @@ cargo test --lib --target $(rustc -vV | awk '/host:/ {print $2}')
 ├── src/
 │   ├── lib.rs
 │   ├── main.rs
+│   ├── shot_recorder.rs
+│   ├── shot_store.rs
+│   ├── scale_weight.rs
 │   ├── telemetry_feed.rs
 │   ├── telemetry_math.rs
 │   ├── web_assets.rs
 │   ├── wifi_provision.rs
+│   ├── scale_ble/
+│   │   ├── mod.rs
+│   │   ├── discovery.rs
+│   │   ├── types.rs
+│   │   └── worker.rs
 │   └── sensors/
 │       ├── mod.rs
 │       ├── pressure.rs

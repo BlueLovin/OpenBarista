@@ -56,6 +56,9 @@ From the Settings page:
 | **Connect** | Pairs with the selected scale |
 | **Disconnect** | Drops the active BLE connection |
 | **Forget** | Removes the saved scale from NVS — stops auto-reconnect |
+| **Smooth Flow On/Off** | Enables/disables flow smoothing on scales that support it (BooKoo) |
+
+The **Smooth Flow** control only appears when the connected scale reports support for that command. The **Start/Stop Extraction** button on the dashboard is always available; when a BooKoo scale is connected, pressing it also sends the scale's brew-start command.
 
 ---
 

@@ -28,6 +28,8 @@ anyhow = "1"
 embedded-hal = "1"
 form_urlencoded = "1"
 log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
 
 [target.'cfg(target_arch = "xtensa")'.dependencies]
 embassy-futures = "0.1"

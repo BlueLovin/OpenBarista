@@ -11,7 +11,8 @@ mod sensors;
 mod web_assets;
 mod wifi_provision;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use embedded_hal::spi::MODE_1;
@@ -24,10 +25,29 @@ use esp_idf_hal::spi;
 use esp_idf_hal::spi::{SpiDeviceDriver, SpiDriver};
 use esp_idf_hal::units::FromValueType;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
+use openbarista::shot_recorder::ShotRecorder;
+use openbarista::shot_store::NvsShotStore;
+use openbarista::sync_utils::lock_or_recover;
 use openbarista::telemetry_feed::SharedTelemetry;
 
 use crate::sensors::pressure::PressureSensor;
 use crate::sensors::temperature::Max31865;
+
+// Minimum plausible wall-clock timestamp (2020-01-01T00:00:00Z).
+// Before SNTP syncs the RTC, SystemTime::now() on the ESP32 returns the
+// device uptime in seconds (a few hundred at most), which looks like a date
+// in early 1970 in the history UI.  Any timestamp below this sentinel is
+// treated as "unsynced" and clamped to 0 so the UI shows "Unknown time"
+// rather than a nonsensical 1970 date.
+const MIN_PLAUSIBLE_UNIX_TS: u64 = 1_577_836_800; // 2020-01-01
+
+fn get_unix_timestamp() -> u64 {
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if ts < MIN_PLAUSIBLE_UNIX_TS { 0 } else { ts }
+}
 
 fn main() -> Result<()> {
     // Ensure the ESP-IDF sys crate's patches are linked in, so that the correct
@@ -40,6 +60,16 @@ fn main() -> Result<()> {
     let nvs_partition = EspDefaultNvsPartition::take()?;
 
     let telemetry = SharedTelemetry::new();
+
+    let shot_store = match NvsShotStore::new(nvs_partition.clone()) {
+        Ok(store) => Arc::new(Mutex::new(store)) as openbarista::shot_store::SharedShotStore,
+        Err(err) => {
+            println!("[shots] Failed to open NVS shot store: {err:#}");
+            return Err(err);
+        }
+    };
+    let shot_recorder = Arc::new(Mutex::new(ShotRecorder::new()));
+
     let scale_runtime = match scale_ble::ScaleRuntime::try_new(
         bluetooth_modem,
         Some(nvs_partition.clone()),
@@ -59,6 +89,8 @@ fn main() -> Result<()> {
         nvs_partition,
         telemetry.clone(),
         scale_runtime.clone(),
+        shot_store.clone(),
+        shot_recorder.clone(),
     )?;
     println!(
         "[main] Connectivity ready at http://{}",
@@ -110,10 +142,15 @@ fn main() -> Result<()> {
 
         telemetry.update(temperature.temperature_c, pressure.bar, pressure.psi);
 
-        // println!(
-        //     "Temp: {:.2} C | Pressure: {:.2} bar | Pressure (PSI): {:.2}",
-        //     temperature.temperature_c, pressure.bar, pressure.psi,
-        // );
+        let snapshot = telemetry.snapshot();
+        let unix_ts = get_unix_timestamp();
+
+        if let Some(shot) = lock_or_recover(&shot_recorder).update(&snapshot, unix_ts) {
+            if let Err(e) = lock_or_recover(&shot_store).save(shot) {
+                println!("[shots] Failed to save shot: {e:#}");
+            }
+        }
+        telemetry.update_recording_active(lock_or_recover(&shot_recorder).is_active());
 
         FreeRtos::delay_ms(50);
     }

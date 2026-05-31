@@ -29,6 +29,12 @@ let latestScaleWeightG = 0;
 let latestFlowGps = 0;
 let scaleConnected = false;
 let shotWeightZeroG = null;
+// Firmware-sync flag.  shotSyncedFromFirmware is set once telemetry
+// confirms recording_active=true while the UI is in recording mode.
+// The exit condition requires this flag, so a stale recording_active=false
+// poll (arriving before the firmware has actually started) can never clear
+// the UI prematurely.
+let shotSyncedFromFirmware = false;
 
 let xs = [];
 let pressures = [];
@@ -256,9 +262,10 @@ async function bootstrapChartAssets() {
 function startTimer() {
   timerHandle = setInterval(() => {
     if (shotStartMs !== null && timerEl) {
-      timerEl.innerHTML =
-        formatTimer((performance.now() - shotStartMs) / 1000) +
-        "<span>s</span>";
+      const formatted = formatTimer((performance.now() - shotStartMs) / 1000);
+      timerEl.innerHTML = formatted + "<span>s</span>";
+      const indicatorTimer = document.getElementById('shotTimerIndicator');
+      if (indicatorTimer) indicatorTimer.textContent = formatted;
     }
   }, 50);
 }
@@ -270,16 +277,24 @@ function stopTimer() {
   }
 }
 
-function startShot() {
+function enterRecordingMode() {
   xs = [];
   pressures = [];
   flows = [];
   weights = [];
   targets = [];
+  lastSeq = -1; // ensure first poll after shot start is never skipped
   shotStartMs = performance.now();
   shotActive = true;
   shotWeightZeroG = scaleConnected ? latestScaleWeightG : 0;
   windowS = 90;
+  // Immediately clear the chart so idle data doesn't linger into the shot view.
+  if (plot) {
+    plot.setData([[], [], [], [], []]);
+    plot.setScale("x", { min: 0, max: 30 });
+  }
+  const indicatorEl = document.getElementById('shotIndicator');
+  if (indicatorEl) indicatorEl.hidden = false;
   if (startBtn) {
     startBtn.textContent = "STOP EXTRACTION";
     startBtn.dataset.active = "1";
@@ -290,16 +305,53 @@ function startShot() {
   startTimer();
 }
 
-function stopShot() {
+function exitRecordingMode() {
   shotActive = false;
   shotStartMs = null;
   shotWeightZeroG = null;
   windowS = IDLE_WINDOW_S;
   stopTimer();
+  const indicatorEl = document.getElementById('shotIndicator');
+  if (indicatorEl) indicatorEl.hidden = true;
   if (startBtn) {
     startBtn.textContent = "START EXTRACTION";
     delete startBtn.dataset.active;
   }
+}
+
+function startShot() {
+  enterRecordingMode();
+  // Tell the backend to start recording regardless of pressure.
+  fetch('/api/shots', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'action=start',
+  })
+    .then(function (r) { if (!r.ok) throw new Error('start failed'); })
+    .catch(function () {
+      // POST failed or returned an error status — roll back the optimistic UI
+      // so the dashboard does not stay stuck in "STOP EXTRACTION".
+      shotSyncedFromFirmware = false;
+      exitRecordingMode();
+    });
+}
+
+function stopShot() {
+  shotSyncedFromFirmware = false;
+  exitRecordingMode();
+  // Save the shot server-side and show a toast with a link.
+  fetch('/api/shots', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'action=save',
+  })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (d.ok) {
+        showToast('Shot saved! <a href="/history?id=' + d.id + '">View \u2192</a>');
+      }
+    })
+    .catch(function () { /* ignore network errors */ });
 }
 
 function formatTimer(totalSeconds) {
@@ -391,6 +443,28 @@ async function poll() {
 
     if (d.seq === lastSeq) return;
     lastSeq = d.seq;
+
+    // Sync recording indicator with firmware truth.
+    if (d.recording_active && !shotActive) {
+      // Firmware auto-detected a shot — enter recording mode without POSTing.
+      shotSyncedFromFirmware = true;
+      enterRecordingMode();
+    } else if (d.recording_active && shotActive && !shotSyncedFromFirmware) {
+      // Firmware confirms recording is active — arm end-detection.
+      // We do not gate this on POST resolution: with the optional BLE command
+      // the firmware is force-started before the HTTP response is sent, so
+      // telemetry can report recording_active=true before the fetch() resolves.
+      // Any observed recording_active=true while the UI is active is valid
+      // firmware confirmation.  The exit condition below requires this flag,
+      // so a stale recording_active=false poll can never clear the UI before
+      // this point is reached.
+      shotSyncedFromFirmware = true;
+    } else if (!d.recording_active && shotActive && shotSyncedFromFirmware) {
+      // Firmware ended the shot (pressure drop / auto-finalize) — clear UI.
+      shotSyncedFromFirmware = false;
+      exitRecordingMode();
+      showToast('Shot ended — <a href="/history">view history \u2192</a>');
+    }
 
     let t;
     if (shotActive) {
@@ -512,3 +586,15 @@ document.addEventListener("DOMContentLoaded", () => {
   setTimeout(bootstrapChartAssets, 50);
   startPolling();
 });
+
+function showToast(html) {
+  var toast = document.createElement('div');
+  toast.className = 'toast';
+  toast.innerHTML = html;
+  document.body.appendChild(toast);
+  setTimeout(function () {
+    toast.style.opacity = '0';
+    toast.style.transition = 'opacity 0.3s';
+    setTimeout(function () { toast.remove(); }, 350);
+  }, 5000);
+}

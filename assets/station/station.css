@@ -6,6 +6,58 @@
   gap: 8px;
 }
 
+.shot-indicator {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #ff7828;
+  letter-spacing: 0.02em;
+}
+
+.shot-indicator[hidden] {
+  display: none;
+}
+
+.shot-indicator-dot {
+  animation: shot-pulse 1s ease-in-out infinite alternate;
+  font-size: 0.6rem;
+}
+
+@keyframes shot-pulse {
+  from { opacity: 1; }
+  to   { opacity: 0.3; }
+}
+
+.toast {
+  position: fixed;
+  bottom: 5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #1e2736;
+  border: 1px solid #3a4a63;
+  border-radius: 10px;
+  padding: 0.7rem 1.25rem;
+  font-size: 0.9rem;
+  color: var(--c-text, #e8ecf4);
+  box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+  z-index: 9999;
+  white-space: nowrap;
+  animation: toast-in 200ms ease;
+}
+
+.toast a {
+  color: #ff7828;
+  text-decoration: underline;
+  margin-left: 0.4em;
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
 .hw-fail-banner {
   display: flex;
   align-items: center;
