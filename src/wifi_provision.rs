@@ -1249,31 +1249,16 @@ pub fn start_station_http_server(
                 // then release it before issuing the BLE command.  The 50 ms
                 // sensor loop shares this mutex, so keeping it locked across a
                 // potentially slow BLE write would stall recording.
-                let (was_active, needs_brew_start) = match shots_post_recorder.lock() {
-                    Ok(mut rec) => {
-                        let was_active = rec.is_active();
-                        rec.force_start(unix_ts);
-                        let needs = !was_active
-                            && shots_post_scale.snapshot().supports_manual_brew_start;
-                        (was_active, needs)
-                    }
-                    Err(_) => {
-                        return Ok::<_, anyhow::Error>({
-                            let headers = response_headers(
-                                "application/json; charset=utf-8",
-                                "no-store",
-                            );
-                            req.into_response(
-                                500,
-                                Some("Internal Server Error"),
-                                &headers,
-                            )?
-                            .write_all(
-                                action_result_json(false, "Recorder unavailable.")
-                                    .as_bytes(),
-                            )?;
-                        })
-                    }
+                // lock_or_recover follows the repo-wide shared-mutex convention
+                // (see sync_utils.rs): recover from poison so manual starts
+                // remain functional even if another thread previously panicked.
+                let (was_active, needs_brew_start) = {
+                    let mut rec = lock_or_recover(&shots_post_recorder);
+                    let was_active = rec.is_active();
+                    rec.force_start(unix_ts);
+                    let needs = !was_active
+                        && shots_post_scale.snapshot().supports_manual_brew_start;
+                    (was_active, needs)
                 };
                 // Recorder lock is released — safe to call BLE now.
                 let scale_command_sent =
