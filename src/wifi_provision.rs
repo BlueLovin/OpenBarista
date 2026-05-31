@@ -1156,10 +1156,7 @@ pub fn start_station_http_server(
 
     let shots_list_store = shot_store.clone();
     server.fn_handler("/api/shots", Method::Get, move |req| {
-        let summaries = match shots_list_store.lock() {
-            Ok(store) => store.list_summaries()?,
-            Err(_) => return Err(anyhow!("shot store unavailable")),
-        };
+        let summaries = lock_or_recover(&shots_list_store).list_summaries()?;
         let payload = serde_json::to_string(&summaries).unwrap_or_else(|_| "[]".to_owned());
         let headers = response_headers("application/json; charset=utf-8", "no-store");
         req.into_response(200, Some("OK"), &headers)?
@@ -1190,10 +1187,7 @@ pub fn start_station_http_server(
             }
         };
 
-        let shot = match shots_detail_store.lock() {
-            Ok(store) => store.get_shot(id)?,
-            Err(_) => return Err(anyhow!("shot store unavailable")),
-        };
+        let shot = lock_or_recover(&shots_detail_store).get_shot(id)?;
 
         match shot {
             Some(s) => {
@@ -1318,8 +1312,7 @@ pub fn start_station_http_server(
                         return Ok::<_, anyhow::Error>(());
                     }
                 };
-                match shots_post_store.lock() {
-                    Ok(mut store) => match store.delete_shot(id) {
+                match { let mut store = lock_or_recover(&shots_post_store); store.delete_shot(id) } {
                         Ok(true) => (200, Some("OK"), action_result_json(true, "Shot deleted.")),
                         Ok(false) => (
                             404,
@@ -1327,8 +1320,6 @@ pub fn start_station_http_server(
                             action_result_json(false, "Shot not found."),
                         ),
                         Err(e) => (400, None, action_result_json(false, &e.to_string())),
-                    },
-                    Err(_) => return Err(anyhow!("shot store unavailable")),
                 }
             }
             _ => (
