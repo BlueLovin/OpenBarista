@@ -65,7 +65,13 @@ impl SharedTelemetry {
 
     pub fn update_recording_active(&self, active: bool) {
         let mut state = lock_or_recover(&self.inner);
-        state.recording_active = active;
+        // Only bump seq when the value actually changes — the JS poller skips
+        // snapshots whose seq is unchanged, so a silent write would make
+        // recording-state transitions invisible to connected clients.
+        if state.recording_active != active {
+            state.seq = state.seq.wrapping_add(1);
+            state.recording_active = active;
+        }
     }
 
     pub fn snapshot(&self) -> TelemetrySnapshot {

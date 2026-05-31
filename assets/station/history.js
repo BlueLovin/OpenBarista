@@ -19,6 +19,7 @@
       { label: 's' },
       { scale: 'y', label: 'bar', size: 44 },
       { scale: 'y2', label: 'g/s', side: 1, size: 44 },
+      { scale: 'y3', label: 'g', side: 0, size: 44 },
     ],
   };
 
