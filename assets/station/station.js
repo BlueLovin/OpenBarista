@@ -29,13 +29,12 @@ let latestScaleWeightG = 0;
 let latestFlowGps = 0;
 let scaleConnected = false;
 let shotWeightZeroG = null;
-// Two-phase firmware-sync flag.  startPostSucceeded is set when the
-// action=start POST resolves; shotSyncedFromFirmware is only set once
-// telemetry subsequently confirms recording_active=true.  This prevents
-// a stale recording_active=false poll (arriving between the POST resolving
-// and the firmware actually starting) from immediately clearing the UI.
+// Firmware-sync flag.  shotSyncedFromFirmware is set once telemetry
+// confirms recording_active=true while the UI is in recording mode.
+// The exit condition requires this flag, so a stale recording_active=false
+// poll (arriving before the firmware has actually started) can never clear
+// the UI prematurely.
 let shotSyncedFromFirmware = false;
-let startPostSucceeded = false;
 
 let xs = [];
 let pressures = [];
@@ -321,7 +320,6 @@ function exitRecordingMode() {
 }
 
 function startShot() {
-  startPostSucceeded = false;
   enterRecordingMode();
   // Tell the backend to start recording regardless of pressure.
   fetch('/api/shots', {
@@ -329,17 +327,17 @@ function startShot() {
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: 'action=start',
   })
-    // Don't set shotSyncedFromFirmware here — the next telemetry poll may
-    // still carry a stale recording_active=false snapshot and would
-    // immediately clear the UI.  Instead, set startPostSucceeded and let
-    // poll() arm shotSyncedFromFirmware once it sees recording_active=true.
-    .then(function () { startPostSucceeded = true; })
-    .catch(function () { /* ignore network errors */ });
+    .then(function (r) { if (!r.ok) throw new Error('start failed'); })
+    .catch(function () {
+      // POST failed or returned an error status — roll back the optimistic UI
+      // so the dashboard does not stay stuck in "STOP EXTRACTION".
+      shotSyncedFromFirmware = false;
+      exitRecordingMode();
+    });
 }
 
 function stopShot() {
   shotSyncedFromFirmware = false;
-  startPostSucceeded = false;
   exitRecordingMode();
   // Save the shot server-side and show a toast with a link.
   fetch('/api/shots', {
@@ -451,17 +449,19 @@ async function poll() {
       // Firmware auto-detected a shot — enter recording mode without POSTing.
       shotSyncedFromFirmware = true;
       enterRecordingMode();
-    } else if (d.recording_active && shotActive && startPostSucceeded && !shotSyncedFromFirmware) {
-      // POST already succeeded AND telemetry now confirms the firmware is
-      // recording — safe to arm firmware-end detection.  Doing this here
-      // (rather than in the .then() callback) avoids a race where a stale
-      // recording_active=false snapshot arrives before the firmware has
-      // actually started and immediately clears the UI.
+    } else if (d.recording_active && shotActive && !shotSyncedFromFirmware) {
+      // Firmware confirms recording is active — arm end-detection.
+      // We do not gate this on POST resolution: with the optional BLE command
+      // the firmware is force-started before the HTTP response is sent, so
+      // telemetry can report recording_active=true before the fetch() resolves.
+      // Any observed recording_active=true while the UI is active is valid
+      // firmware confirmation.  The exit condition below requires this flag,
+      // so a stale recording_active=false poll can never clear the UI before
+      // this point is reached.
       shotSyncedFromFirmware = true;
     } else if (!d.recording_active && shotActive && shotSyncedFromFirmware) {
       // Firmware ended the shot (pressure drop / auto-finalize) — clear UI.
       shotSyncedFromFirmware = false;
-      startPostSucceeded = false;
       exitRecordingMode();
       showToast('Shot saved! <a href="/history">View history \u2192</a>');
     }

@@ -10,7 +10,7 @@ use crate::shot_recorder::{ShotRecord, ShotSummary, MAX_SHOT_POINTS};
 
 /// Abstraction over shot persistence. Swap `NvsShotStore` for an `ApiShotStore`
 /// (or any other backend) by replacing the concrete type passed to
-/// `setup_wifi_station`.
+/// `start_station_http_server`.
 pub trait ShotStore: Send {
     fn save(&mut self, shot: ShotRecord) -> Result<u32>;
     fn list_summaries(&self) -> Result<Vec<ShotSummary>>;
