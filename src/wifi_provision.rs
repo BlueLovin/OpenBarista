@@ -69,7 +69,7 @@ const CAPTIVE_PATHS: &[&str] = &[
     "/redirect",
 ];
 
-fn response_headers<'a>(content_type: &'a str, cache_control: &'a str) -> [(&'a str, &'a str); 7] {
+pub(crate) fn response_headers<'a>(content_type: &'a str, cache_control: &'a str) -> [(&'a str, &'a str); 7] {
     [
         ("Content-Type", content_type),
         ("Cache-Control", cache_control),
@@ -85,7 +85,7 @@ fn response_headers<'a>(content_type: &'a str, cache_control: &'a str) -> [(&'a 
 }
 
 // Station pages use uPlot which applies inline styles, so style-src allows 'unsafe-inline'.
-fn station_response_headers<'a>(
+pub(crate) fn station_response_headers<'a>(
     content_type: &'a str,
     cache_control: &'a str,
 ) -> [(&'a str, &'a str); 7] {
@@ -175,11 +175,11 @@ struct DeviceSettings {
 fn connect_progress_json(progress: &ConnectProgress) -> String {
     format!(
         "{{\"stage\":\"{}\",\"ssid\":\"{}\",\"attempt\":{},\"total\":{},\"message\":\"{}\"}}",
-        json_escape(&progress.stage),
-        json_escape(&progress.ssid),
+        crate::json_escape(&progress.stage),
+        crate::json_escape(&progress.ssid),
         progress.attempt,
         progress.total,
-        json_escape(&progress.message),
+        crate::json_escape(&progress.message),
     )
 }
 
@@ -976,7 +976,10 @@ pub fn start_station_http_server(
     let html = web_assets::station_index_html(ip_addr, &build_id_value, &board_id_value);
     let settings_html = web_assets::settings_index_html(ip_addr, &build_id_value, &board_id_value);
     let history_html = web_assets::history_index_html(ip_addr, &build_id_value, &board_id_value);
-    let mut server = EspHttpServer::new(&HttpConfig::default())?;
+    let mut server = EspHttpServer::new(&HttpConfig {
+        stack_size: 10240,
+        ..Default::default()
+    })?;
 
     server.fn_handler("/", Method::Get, move |req| {
         let headers = station_response_headers("text/html; charset=utf-8", "no-store");
@@ -1037,6 +1040,101 @@ pub fn start_station_http_server(
             Ok::<_, anyhow::Error>(())
         })?;
     }
+
+    server.fn_handler("/api/diagnostics", Method::Get, move |req| {
+        let free_heap = unsafe { esp_idf_svc::sys::esp_get_free_heap_size() };
+        let min_free_heap = unsafe { esp_idf_svc::sys::esp_get_minimum_free_heap_size() };
+        let reset_label = openbarista::crash_log::reset_reason_label();
+        let uptime_us = unsafe { esp_idf_svc::sys::esp_timer_get_time() };
+        let payload = format!(
+            "{{\"free_heap\":{},\"min_free_heap\":{},\"reset_reason\":\"{}\",\"uptime_us\":{}}}",
+            free_heap, min_free_heap, reset_label, uptime_us
+        );
+        let headers = response_headers("application/json; charset=utf-8", "no-store");
+        req.into_response(200, Some("OK"), &headers)?
+            .write_all(payload.as_bytes())?;
+        Ok::<_, anyhow::Error>(())
+    })?;
+
+    // Persistent crash/event log (see crate crash_log).
+    server.fn_handler("/api/logs", Method::Get, move |req| {
+        let entries = openbarista::crash_log::all_entries();
+        let payload = crash_logs_json(
+            openbarista::crash_log::boot_count(),
+            openbarista::crash_log::reset_reason_label(),
+            coredump_size(),
+            &entries,
+        );
+        let headers = response_headers("application/json; charset=utf-8", "no-store");
+        req.into_response(200, Some("OK"), &headers)?
+            .write_all(payload.as_bytes())?;
+        Ok::<_, anyhow::Error>(())
+    })?;
+
+    // Raw core dump from the last panic (ELF format), for use with
+    // `espcoredump` / gdb. Streams in chunks; 404 when none is stored.
+    server.fn_handler("/api/coredump", Method::Get, move |req| {
+        use esp_idf_svc::partition::{
+            EspDataPartitionSubtype, EspPartition, EspPartitionType,
+        };
+
+        if coredump_size() == 0 {
+            let headers = response_headers("application/json; charset=utf-8", "no-store");
+            req.into_response(404, Some("Not Found"), &headers)?
+                .write_all(b"{\"ok\":false,\"error\":\"No core dump stored\"}")?;
+            return Ok::<_, anyhow::Error>(());
+        }
+        let partition = (unsafe {
+            EspPartition::find_first(EspPartitionType::Data(EspDataPartitionSubtype::Coredump))
+        })
+        .ok()
+        .flatten();
+        let Some(mut partition) = partition else {
+            let headers = response_headers("application/json; charset=utf-8", "no-store");
+            req.into_response(500, Some("Internal Server Error"), &headers)?
+                .write_all(b"{\"ok\":false,\"error\":\"coredump partition not found\"}")?;
+            return Ok::<_, anyhow::Error>(());
+        };
+
+        let headers = response_headers("application/octet-stream", "no-store");
+        let mut response = req.into_response(200, Some("OK"), &headers)?;
+        let mut buf = [0u8; 2048];
+        let mut offset = 0usize;
+        while offset < partition.size() {
+            let chunk = (partition.size() - offset).min(buf.len());
+            partition
+                .read(offset, &mut buf[..chunk])
+                .map_err(|e| anyhow::anyhow!("coredump read failed: {e}"))?;
+            response
+                .write_all(&buf[..chunk])
+                .map_err(|e| anyhow::anyhow!("coredump write failed: {e}"))?;
+            offset += chunk;
+        }
+        Ok::<_, anyhow::Error>(())
+    })?;
+
+    // Erase the stored core dump to reclaim the partition.
+    server.fn_handler("/api/coredump/erase", Method::Post, move |mut req| {
+        // Drain any body so the connection can be reused.
+        let mut sink = [0u8; 128];
+        loop {
+            let n = req.read(&mut sink).map_err(|e| anyhow::anyhow!("{e:?}"))?;
+            if n == 0 {
+                break;
+            }
+        }
+        let headers = response_headers("application/json; charset=utf-8", "no-store");
+        let erased =
+            unsafe { esp_idf_svc::sys::esp_core_dump_image_erase() } == esp_idf_svc::sys::ESP_OK;
+        let (status, payload) = if erased {
+            (200, "{\"ok\":true,\"message\":\"Core dump erased\"}")
+        } else {
+            (500, "{\"ok\":false,\"error\":\"Failed to erase core dump\"}")
+        };
+        req.into_response(status, Some(if erased { "OK" } else { "Error" }), &headers)?
+            .write_all(payload.as_bytes())?;
+        Ok::<_, anyhow::Error>(())
+    })?;
 
     let telemetry_for_handler = telemetry.clone();
     server.fn_handler("/api/telemetry", Method::Get, move |req| {
@@ -1582,7 +1680,7 @@ fn networks_json(items: &[String]) -> String {
             out.push(',');
         }
         out.push('"');
-        out.push_str(&json_escape(item));
+        out.push_str(&crate::json_escape(item));
         out.push('"');
     }
     out.push(']');
@@ -1601,14 +1699,14 @@ fn settings_json(
     format!(
         "{{\"ok\":{},\"message\":\"{}\",\"rebooting\":{},\"ssid\":\"{}\",\"device_label\":\"{}\",\"temperature_offset_c\":{:.3},\"ip_addr\":\"{}\",\"build_id\":\"{}\",\"board_id\":\"{}\"}}",
         if ok { "true" } else { "false" },
-        json_escape(message),
+        crate::json_escape(message),
         if rebooting { "true" } else { "false" },
-        json_escape(&settings.ssid),
-        json_escape(&settings.device_label),
+        crate::json_escape(&settings.ssid),
+        crate::json_escape(&settings.device_label),
         settings.temperature_offset_c,
-        json_escape(ip_addr),
-        json_escape(build_id),
-        json_escape(board_id),
+        crate::json_escape(ip_addr),
+        crate::json_escape(build_id),
+        crate::json_escape(board_id),
     )
 }
 
@@ -1641,11 +1739,51 @@ fn telemetry_json(
     )
 }
 
+/// Size of the stored core dump in bytes (0 when none is stored).
+fn coredump_size() -> usize {
+    let mut addr: usize = 0;
+    let mut size: usize = 0;
+    let result =
+        unsafe { esp_idf_svc::sys::esp_core_dump_image_get(&mut addr, &mut size) };
+    if result == esp_idf_svc::sys::ESP_OK {
+        size
+    } else {
+        0
+    }
+}
+
+fn crash_logs_json(
+    boot_count: u32,
+    reset_reason: &str,
+    coredump_bytes: usize,
+    entries: &[(u64, String)],
+) -> String {
+    let mut out = String::with_capacity(128 + entries.len() * 96);
+    out.push_str("{\"boot_count\":");
+    out.push_str(&boot_count.to_string());
+    out.push_str(",\"reset_reason\":\"");
+    out.push_str(&crate::json_escape(reset_reason));
+    out.push_str("\",\"coredump_bytes\":");
+    out.push_str(&coredump_bytes.to_string());
+    out.push_str(",\"entries\":[");
+    for (i, (seq, line)) in entries.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(&format!(
+            "{{\"seq\":{seq},\"line\":\"{}\"}}",
+            crate::json_escape(line)
+        ));
+    }
+    out.push_str("]}");
+    out
+}
+
 fn action_result_json(ok: bool, message: &str) -> String {
     format!(
         "{{\"ok\":{},\"message\":\"{}\"}}",
         if ok { "true" } else { "false" },
-        json_escape(message),
+        crate::json_escape(message),
     )
 }
 
@@ -1655,9 +1793,9 @@ fn scale_status_json(snapshot: &crate::scale_ble::ScaleStatusSnapshot) -> String
         |saved| {
             format!(
                 "{{\"address\":\"{}\",\"name\":\"{}\",\"addr_type\":\"{}\"}}",
-                json_escape(&saved.address),
-                json_escape(&saved.name),
-                json_escape(&saved.addr_type),
+                crate::json_escape(&saved.address),
+                crate::json_escape(&saved.name),
+                crate::json_escape(&saved.addr_type),
             )
         },
     );
@@ -1669,11 +1807,11 @@ fn scale_status_json(snapshot: &crate::scale_ble::ScaleStatusSnapshot) -> String
         }
         devices_json.push_str(&format!(
             "{{\"address\":\"{}\",\"name\":\"{}\",\"address_type\":\"{}\",\"rssi\":{},\"protocol_hint\":\"{}\",\"saved\":{}}}",
-            json_escape(&device.address),
-            json_escape(&device.name),
-            json_escape(&device.address_type),
+            crate::json_escape(&device.address),
+            crate::json_escape(&device.name),
+            crate::json_escape(&device.address_type),
             device.rssi,
-            json_escape(&device.protocol_hint),
+            crate::json_escape(&device.protocol_hint),
             if device.saved { "true" } else { "false" },
         ));
     }
@@ -1687,11 +1825,11 @@ fn scale_status_json(snapshot: &crate::scale_ble::ScaleStatusSnapshot) -> String
     format!(
         "{{\"available\":{},\"state\":\"{}\",\"message\":\"{}\",\"connected_name\":\"{}\",\"connected_address\":\"{}\",\"protocol\":\"{}\",\"weight_g\":{:.3},\"flow_gps\":{:.3},\"battery_percent\":{},\"supports_manual_brew_start\":{},\"supports_flow_smoothing\":{},\"saved_scale\":{},\"devices\":{}}}",
         if snapshot.available { "true" } else { "false" },
-        json_escape(&snapshot.state),
-        json_escape(&snapshot.message),
-        json_escape(&snapshot.connected_name),
-        json_escape(&snapshot.connected_address),
-        json_escape(&snapshot.protocol),
+        crate::json_escape(&snapshot.state),
+        crate::json_escape(&snapshot.message),
+        crate::json_escape(&snapshot.connected_name),
+        crate::json_escape(&snapshot.connected_address),
+        crate::json_escape(&snapshot.protocol),
         sanitize_telemetry_value(snapshot.weight_g),
         sanitize_telemetry_value(snapshot.flow_gps),
         battery_json,
@@ -1710,21 +1848,6 @@ fn sanitize_telemetry_value(value: f32) -> f32 {
     }
 }
 
-fn json_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for ch in s.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c.is_control() => out.push(' '),
-            c => out.push(c),
-        }
-    }
-    out
-}
 
 fn create_softap_netif(ap_gateway: Ipv4Addr) -> Result<EspNetif> {
     let mut ap_netif_conf = NetifConfiguration::wifi_default_router();

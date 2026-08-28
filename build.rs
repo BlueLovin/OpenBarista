@@ -10,6 +10,18 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(esp_idf_comp_mdns_enabled)");
     println!("cargo::rustc-check-cfg=cfg(esp_idf_comp_espressif__mdns_enabled)");
 
+    // Detect explicit ota_enabled cfg flag via env var (esp-rs convention).
+    // rerun-if-env-changed is required, otherwise cargo keeps the previously
+    // emitted cfg flags when the env var is toggled.
+    println!("cargo:rerun-if-env-changed=CFG_OTA_ENABLED");
+    if let Ok(_val) = std::env::var("CFG_OTA_ENABLED") {
+        println!("cargo:rustc-cfg=ota_enabled");
+        println!("cargo::warning=OTA upload feature ENABLED — this is a development-only mode");
+    }
+
+    // Declare cfg for ota_enabled so rustc doesn't warn
+    println!("cargo:rustc-check-cfg=cfg(ota_enabled)");
+
     println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
     println!("cargo:rerun-if-changed=.git/HEAD");
 

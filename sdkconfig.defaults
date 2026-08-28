@@ -28,9 +28,39 @@ CONFIG_HTTPD_WS_SUPPORT=n
 # --- NVS (non-volatile storage for WiFi credentials) ------------------------
 CONFIG_NVS_ENCRYPTION=n
 
+# --- Partition table: two OTA slots + coredump (see partitions_two_ota.csv) --
+# Required for HTTP OTA updates (POST /api/firmware-upload) and persistent
+# panic core dumps. NVS keeps its old offset so credentials survive the first
+# USB reflash with this table.
+#
+# The path is relative to the esp-idf-sys build dir
+# (target/<triple>/<profile>/build/esp-idf-sys-<hash>/out), hence the climb
+# back up to the workspace root.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="../../../../../../partitions_two_ota.csv"
+# The table above needs a 4 MB module (standard on ESP32 dev boards) — two
+# ~1.9 MB OTA slots + coredump + NVS.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
+
+# --- OTA rollback ------------------------------------------------------------
+# After an OTA update the new image boots in "pending verify" state. If it
+# crashes or hangs before the app confirms itself healthy (see src/health.rs),
+# the bootloader automatically rolls back to the previous slot.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# --- Core dumps: persist panic register/task dump to the coredump partition --
+# Fetchable at GET /api/coredump, erasable via POST /api/coredump/erase.
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
+
 # --- FreeRTOS ----------------------------------------------------------------
 # Increase the main task stack to accommodate provisioning + WiFi stack activity.
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 
 # --- Logging -----------------------------------------------------------------
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+# If the system panics, print the reason and reboot (default, kept explicit
+# because restart-on-panic is part of the crash recovery design).
+CONFIG_ESP_SYSTEM_PANIC_PRINT_REBOOT=y

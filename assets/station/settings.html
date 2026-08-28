@@ -146,6 +146,28 @@
           >
         </p>
       </section>
+
+      <!-- Hidden developer panel: revealed by clicking the Build ID 5 times. -->
+      <section class="panel dev-panel" id="devPanel" hidden>
+        <p class="eyebrow">Developer</p>
+        <h2>Device Logs</h2>
+        <p class="hint" id="devLogMeta">Loading…</p>
+        <div class="dev-actions">
+          <button id="devRefreshLogsBtn" type="button" class="btn-secondary">
+            Refresh
+          </button>
+          <a id="devCoredumpLink" class="btn-secondary" href="/api/coredump" hidden>
+            Download core dump
+          </a>
+          <button id="devEraseCoredumpBtn" type="button" class="btn-secondary" hidden>
+            Erase core dump
+          </button>
+          <button id="devPanicBtn" type="button" class="btn-secondary">
+            Test panic
+          </button>
+        </div>
+        <pre id="devLogOutput" class="dev-log">Loading…</pre>
+      </section>
     </main>
   </body>
 </html>

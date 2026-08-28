@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Firmware Upload — OpenBarista Dev Portal</title>
+    <link rel="stylesheet" href="portal.css">
+    <link rel="stylesheet" href="upload.css">
+    <script src="upload.js" defer></script>
+    <style>
+        body { margin: 2rem auto; max-width: 60ch; font-family: system-ui, sans-serif; }
+        .main { background: #f5f5f5; border-radius: 8px; padding: 1.5rem; }
+        h1 { color: #333; margin-bottom: 1rem; }
+        .warning { background: #fff0e6; border: 2px solid #cc3300; padding: 0.75rem; border-radius: 4px; color: #8b1c09; font-weight: bold; margin-bottom: 1.5rem; }
+        .warning strong { display: block; font-size: 1.2em; margin-bottom: 0.3em; }
+        .warning p { margin: 0; line-height: 1.4; }
+        input[type="file"] { margin: 1rem 0; padding: 0.5rem; border: 1px solid #ccc; background: white; }
+        label { display: block; margin-bottom: 0.75rem; font-weight: bold; color: #444; }
+        .checkbox-group { display: flex; align-items: flex-start; gap: 0.5rem; }
+        input[type="checkbox"] { width: auto; margin-top: 3px; accent-color: #dc2626; }
+        button { background: #0d6efd; color: white; border: none; padding: 0.75rem 1.5rem; font-size: 1rem; cursor: pointer; border-radius: 4px; transition: background 0.2s; }
+        button:hover { background: #0b5ed7; }
+        .instructions { color: #666; font-size: 0.9em; margin-top: 1rem; line-height: 1.5; }
+    </style>
+</head>
+<body>
+    <div class="main">
+        <h1>Firmware Upload (Dev Only)</h1>
+
+        <section class="warning" aria-live="assertive">
+            <strong>&#9888; DANGER — Firmware Reflash &#9888;</strong>
+            <p>This will overwrite the firmware on the device. NVS storage (WiFi credentials, settings) is on a separate partition and will be preserved. If the new firmware fails to boot, the device automatically rolls back to the previous version. Use only on development or test devices.</p>
+        </section>
+
+        <form id="uploadForm" method="POST" action="/api/firmware-upload">
+            <label for="firmwareFile">Select Firmware File</label>
+            <input type="file" name="firmwareFile" id="firmwareFile" accept=".bin,.BIN" required>
+            <div class="instructions">Upload a compiled OpenBarista binary (.bin) from a development build. Maximum 1.9 MB. Flashing takes up to a minute — don't power off the machine.</div>
+
+            <label>
+                I understand this is unsafe and will erase all firmware
+                <input type="checkbox" name="acknowledge_danger" required value="1">
+            </label>
+
+            <button type="submit">Flash & Reboot</button>
+        </form>
+    </div>
+</body>
+</html>
+

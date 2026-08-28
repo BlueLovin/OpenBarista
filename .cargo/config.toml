@@ -3,7 +3,7 @@ target = "xtensa-esp32-espidf"
 
 [target.xtensa-esp32-espidf]
 linker = "ldproxy"
-runner = "espflash flash --monitor"
+runner = "espflash flash --monitor --partition-table partitions_two_ota.csv --erase-parts otadata"
 
 [unstable]
 build-std = ["std", "panic_abort"]

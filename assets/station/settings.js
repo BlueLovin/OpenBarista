@@ -537,3 +537,120 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   scalePollHandle = setInterval(pollScaleStatus, 1000);
 });
+
+// --- Hidden developer panel -------------------------------------------------
+// Click the Build ID 5 times on the settings page to reveal a raw log viewer
+// (persisted crash log + core dump management). Intentionally crude.
+
+const devPanel = document.getElementById("devPanel");
+const devLogMetaEl = document.getElementById("devLogMeta");
+const devLogOutputEl = document.getElementById("devLogOutput");
+const devRefreshLogsBtn = document.getElementById("devRefreshLogsBtn");
+const devCoredumpLink = document.getElementById("devCoredumpLink");
+const devEraseCoredumpBtn = document.getElementById("devEraseCoredumpBtn");
+const devPanicBtn = document.getElementById("devPanicBtn");
+const buildIdTriggerEl = document.getElementById("buildId");
+
+let buildIdClicks = 0;
+let buildIdClickTimer = null;
+
+if (buildIdTriggerEl && devPanel) {
+  buildIdTriggerEl.style.cursor = "pointer";
+  buildIdTriggerEl.addEventListener("click", () => {
+    buildIdClicks += 1;
+    // Reset the counter if the clicks are not in quick succession.
+    clearTimeout(buildIdClickTimer);
+    buildIdClickTimer = setTimeout(() => {
+      buildIdClicks = 0;
+    }, 2000);
+
+    if (buildIdClicks >= 5) {
+      buildIdClicks = 0;
+      clearTimeout(buildIdClickTimer);
+      devPanel.hidden = false;
+      devPanel.scrollIntoView({ behavior: "smooth" });
+      loadDevLogs();
+    }
+  });
+}
+
+function renderDevLogs(data) {
+  if (devLogMetaEl) {
+    const parts = [
+      `boot #${data.boot_count}`,
+      `reset: ${data.reset_reason}`,
+      `core dump: ${
+        data.coredump_bytes > 0 ? `${data.coredump_bytes} bytes` : "none"
+      }`,
+      `${data.entries ? data.entries.length : 0} log lines`,
+    ];
+    devLogMetaEl.textContent = parts.join(" — ");
+  }
+
+  const hasCoredump = data.coredump_bytes > 0;
+  if (devCoredumpLink) devCoredumpLink.hidden = !hasCoredump;
+  if (devEraseCoredumpBtn) devEraseCoredumpBtn.hidden = !hasCoredump;
+
+  if (devLogOutputEl) {
+    const lines = (data.entries || []).map((e) => `${e.seq}  ${e.line}`);
+    devLogOutputEl.textContent = lines.length
+      ? lines.join("\n")
+      : "(no log entries)";
+  }
+}
+
+async function loadDevLogs() {
+  if (devLogOutputEl) devLogOutputEl.textContent = "Loading…";
+  try {
+    const res = await fetch("/api/logs", { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    renderDevLogs(await res.json());
+  } catch (err) {
+    if (devLogOutputEl) {
+      devLogOutputEl.textContent = `Failed to load logs: ${
+        err.message || err
+      }`;
+    }
+  }
+}
+
+if (devRefreshLogsBtn) {
+  devRefreshLogsBtn.addEventListener("click", loadDevLogs);
+}
+
+if (devEraseCoredumpBtn) {
+  devEraseCoredumpBtn.addEventListener("click", async () => {
+    if (!confirm("Erase the stored core dump?")) return;
+    try {
+      const res = await fetch("/api/coredump/erase", { method: "POST" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await loadDevLogs();
+    } catch (err) {
+      alert(`Erase failed: ${err.message || err}`);
+    }
+  });
+}
+
+if (devPanicBtn) {
+  devPanicBtn.addEventListener("click", async () => {
+    if (
+      !confirm(
+        "Crash the firmware on purpose to test panic logging? The device " +
+          "will reboot (or roll back if it was just OTA-flashed).",
+      )
+    ) {
+      return;
+    }
+    try {
+      const res = await fetch("/api/test-panic", { method: "POST" });
+      if (res.status === 404) {
+        alert("Test panic is only available on dev builds (CFG_OTA_ENABLED=1).");
+        return;
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      alert("Panic triggered. Wait ~15 s, then hit Refresh.");
+    } catch (err) {
+      alert(`Panic request failed: ${err.message || err}`);
+    }
+  });
+}
