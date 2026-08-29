@@ -222,6 +222,10 @@ fn main() -> Result<()> {
                             openbarista::health::resume_hang_monitor();
                             openbarista::crash_log::record("ota: rejected, firmware too large");
                             openbarista::crash_log::flush();
+                            // Drain the rest of the body before responding, so
+                            // the client sees the 413 JSON instead of a reset
+                            // connection while it is still streaming.
+                            drain_body(&mut req);
                             let hdrs = wifi_provision::response_headers(
                                 "application/json; charset=utf-8",
                                 "no-store",
@@ -234,6 +238,7 @@ fn main() -> Result<()> {
                             openbarista::health::resume_hang_monitor();
                             openbarista::crash_log::record(&format!("ota: flash write failed: {err}"));
                             openbarista::crash_log::flush();
+                            drain_body(&mut req);
                             let hdrs = wifi_provision::response_headers(
                                 "application/json; charset=utf-8",
                                 "no-store",
@@ -381,6 +386,20 @@ fn main() -> Result<()> {
         openbarista::crash_log::periodic_flush();
 
         FreeRtos::delay_ms(50);
+    }
+}
+
+/// Reads and discards the remaining request body so the connection can be
+/// finished cleanly and the client actually receives the error response we
+/// send instead of a connection reset mid-upload.
+#[cfg(ota_enabled)]
+fn drain_body(req: &mut impl esp_idf_svc::io::Read) {
+    let mut sink = [0u8; 2048];
+    loop {
+        match req.read(&mut sink) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
     }
 }
 

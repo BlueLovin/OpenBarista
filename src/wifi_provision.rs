@@ -1078,7 +1078,8 @@ pub fn start_station_http_server(
             EspDataPartitionSubtype, EspPartition, EspPartitionType,
         };
 
-        if coredump_size() == 0 {
+        let dump_size = coredump_size();
+        if dump_size == 0 {
             let headers = response_headers("application/json; charset=utf-8", "no-store");
             req.into_response(404, Some("Not Found"), &headers)?
                 .write_all(b"{\"ok\":false,\"error\":\"No core dump stored\"}")?;
@@ -1100,8 +1101,10 @@ pub fn start_station_http_server(
         let mut response = req.into_response(200, Some("OK"), &headers)?;
         let mut buf = [0u8; 2048];
         let mut offset = 0usize;
-        while offset < partition.size() {
-            let chunk = (partition.size() - offset).min(buf.len());
+        // Stream only the actual dump, not the whole 0x30000 partition
+        // (which would append a large 0xFF tail of erased flash).
+        while offset < dump_size {
+            let chunk = (dump_size - offset).min(buf.len());
             partition
                 .read(offset, &mut buf[..chunk])
                 .map_err(|e| anyhow::anyhow!("coredump read failed: {e}"))?;

@@ -10,7 +10,8 @@
 //! Layout in NVS (namespace `crashlog`):
 //! - `bootcnt` — u32 boot counter (little endian blob)
 //! - `l0..l63` — ring slots, each blob = `[u64 seq][bytes...]`
-//! - `lseq`    — u64 seq of the newest persisted entry (informational)
+//! - `lseq`    — u64 head seq, read back at init so sequences continue
+//!               monotonically across reboots (not just informational)
 //!
 //! The ring logic is plain Rust and unit-tested on the host; all ESP-IDF /
 //! NVS specifics are behind `#[cfg(target_arch = "xtensa")]`.
@@ -36,7 +37,10 @@ const FLUSH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 struct RingState {
     /// Sequence number of the most recent entry (monotonically increasing).
     next_seq: u64,
-    /// Sequence number up to which entries have been persisted to NVS.
+    /// Exclusive high-water mark of persistence: entries with `seq <
+    /// flushed_seq` are already in NVS, entries with `seq >= flushed_seq`
+    /// still need writing. Starts at 0 so the very first entry (the boot
+    /// record) is persisted.
     flushed_seq: u64,
     /// Ring of the most recent entries, oldest first.
     entries: Vec<(u64, String)>,
@@ -124,6 +128,19 @@ pub fn all_entries() -> Vec<(u64, String)> {
     merged
 }
 
+/// Entries not yet persisted to NVS (oldest first).
+///
+/// Shared by the device `flush()` and the host tests so the watermark
+/// semantics stay in sync.
+fn unflushed_entries(state: &RingState) -> Vec<(u64, String)> {
+    state
+        .entries
+        .iter()
+        .filter(|(seq, _)| *seq >= state.flushed_seq)
+        .cloned()
+        .collect()
+}
+
 /// Persists all not-yet-persisted RAM entries to NVS.
 ///
 /// Only changed slots are rewritten, so NVS wear is bounded by the actual
@@ -132,10 +149,10 @@ pub fn all_entries() -> Vec<(u64, String)> {
 pub fn flush() {
     let Some(nvs) = open_nvs() else { return };
     let mut ring = ring();
-    for (seq, line) in ring.entries.iter() {
-        if *seq <= ring.flushed_seq {
-            continue;
-        }
+    // Snapshot the pending entries while holding the lock, so the watermark
+    // update below can never mark an entry flushed that wasn't written.
+    let pending = unflushed_entries(&ring);
+    for (seq, line) in &pending {
         let key = format!("l{}", seq % RING_SLOTS as u64);
         let mut blob = Vec::with_capacity(8 + line.len());
         blob.extend_from_slice(&seq.to_le_bytes());
@@ -219,10 +236,32 @@ pub fn reset_reason_label() -> &'static str {
 /// Must be called once at startup, *before* any thread that could panic.
 /// The default NVS partition is moved in (not re-taken) because `main`
 /// already owns it.
+/// Reads the persisted head sequence (`lseq`) back from NVS so that the
+/// in-RAM sequence keeps increasing across reboots. Without this, every boot
+/// would restart at seq 0 and (a) the merge in [`all_entries`] would hide the
+/// new boot's early entries whenever the previous boot persisted higher seqs,
+/// and (b) NVS slots would temporarily interleave entries from two boots.
+#[cfg(target_arch = "xtensa")]
+fn persisted_head_seq() -> u64 {
+    let Some(nvs) = open_nvs() else { return 0 };
+    let mut buf = [0u8; 8];
+    match nvs.get_blob(KEY_HEAD_SEQ, &mut buf) {
+        Ok(Some(data)) if data.len() == 8 => u64::from_le_bytes(data.try_into().unwrap()),
+        _ => 0,
+    }
+}
+
 #[cfg(target_arch = "xtensa")]
 pub fn init(nvs_partition: esp_idf_svc::nvs::EspDefaultNvsPartition, build_id: &str) {
     if XTENSA_NVS_PARTITION.set(nvs_partition).is_err() {
         println!("[crashlog] already initialized");
+    }
+    // Continue the sequence where the previous boot left off, *before*
+    // recording this boot's entry.
+    {
+        let mut ring = ring();
+        ring.next_seq = persisted_head_seq();
+        ring.flushed_seq = ring.next_seq;
     }
     let count = boot_count().wrapping_add(1);
     if let Some(nvs) = open_nvs() {
@@ -359,5 +398,49 @@ mod tests {
         if overflow > 0 {
             state.entries.drain(..overflow);
         }
+    }
+
+    #[test]
+    fn flush_watermark_is_exclusive() {
+        // Regression: with the old `seq <= flushed_seq` condition and
+        // flushed_seq starting at 0, the first entry (the boot record) was
+        // skipped by every flush and never reached NVS.
+        let mut state = RingState::default();
+        push_line(&mut state, "boot #1");
+        assert_eq!(unflushed_seqs_of(&state), vec![0]);
+
+        // Simulate a flush: everything currently in the ring is persisted.
+        state.flushed_seq = state.next_seq;
+        assert_eq!(unflushed_seqs_of(&state), Vec::<u64>::new());
+
+        // New entries after the flush become pending again.
+        push_line(&mut state, "later event");
+        assert_eq!(unflushed_seqs_of(&state), vec![1]);
+    }
+
+    fn unflushed_seqs_of(state: &RingState) -> Vec<u64> {
+        unflushed_entries(state)
+            .iter()
+            .map(|(seq, _)| *seq)
+            .collect()
+    }
+
+    #[test]
+    fn seq_continues_across_seeded_restart() {
+        // Mirrors what init() does on device: seed the ring from the
+        // persisted head so the new boot's entries stay visible in
+        // all_entries() (they must be > the persisted max).
+        let persisted_max: u64 = 40;
+        let mut state = RingState {
+            next_seq: persisted_max,
+            flushed_seq: persisted_max,
+            entries: Vec::new(),
+        };
+        push_line(&mut state, "boot #2");
+        // Every new entry is above the persisted max, so nothing is hidden.
+        for (seq, _) in &state.entries {
+            assert!(*seq > persisted_max - 1);
+        }
+        assert_eq!(unflushed_seqs_of(&state), vec![40]);
     }
 }

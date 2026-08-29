@@ -24,6 +24,14 @@ fn main() {
 
     println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
     println!("cargo:rerun-if-changed=.git/HEAD");
+    // HEAD alone only changes on branch switches; also watch the ref file it
+    // points at so new commits on the same branch update the Build ID even
+    // when no source file changed (e.g. docs-only commits).
+    if let Ok(head) = std::fs::read_to_string(".git/HEAD") {
+        if let Some(branch_ref) = head.trim().strip_prefix("ref: ") {
+            println!("cargo:rerun-if-changed=.git/{branch_ref}");
+        }
+    }
 
     let git_short = std::process::Command::new("git")
         .args(["rev-parse", "--short", "HEAD"])

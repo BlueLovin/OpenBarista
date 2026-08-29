@@ -69,7 +69,9 @@ pub fn start_monitor() {
     feed();
     std::thread::Builder::new()
         .name("health-monitor".into())
-        .stack_size(4096)
+        // Generous stack: the monitor thread does format!, mutex locking,
+        // println! and NVS writes; 4 KB proved too tight to trust.
+        .stack_size(8192)
         .spawn(|| loop {
             std::thread::sleep(MONITOR_INTERVAL);
             if hang_monitor_paused() {
