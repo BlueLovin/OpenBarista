@@ -93,6 +93,10 @@ pub fn captive_static(path: &str) -> Option<StaticAsset> {
             cache_control: "public, max-age=86400",
             body: PORTAL_JS,
         }),
+        #[cfg(ota_enabled)]
+        "/upload.css" => Some(upload_css()),
+        #[cfg(ota_enabled)]
+        "/upload.js"  => Some(upload_js()),
         _ => None,
     }
 }
@@ -189,3 +193,43 @@ pub fn history_css() -> StaticAsset {
         body: HISTORY_CSS,
     }
 }
+
+// --- OTA Upload assets (only compiled when CFG_OTA_ENABLED is set at build time) ---
+#[cfg(ota_enabled)]
+pub fn upload_html() -> String {
+    const UPLOAD_TEMPLATE: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/assets/portal/upload.html"
+    ));
+    UPLOAD_TEMPLATE.to_string()
+}
+
+#[cfg(ota_enabled)]
+const UPLOAD_CSS: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/assets/portal/upload.css"
+));
+#[cfg(ota_enabled)]
+pub fn upload_css() -> StaticAsset {
+    StaticAsset {
+        content_type: "text/css; charset=utf-8",
+        cache_control: "public, max-age=86400",
+        body: UPLOAD_CSS,
+    }
+}
+
+#[cfg(ota_enabled)]
+const UPLOAD_JS: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/assets/portal/upload.js"
+));
+#[cfg(ota_enabled)]
+pub fn upload_js() -> StaticAsset {
+    StaticAsset {
+        content_type: "application/javascript; charset=utf-8",
+        cache_control: "public, max-age=86400",
+        body: UPLOAD_JS,
+    }
+}
+
+// --- End OTA Upload assets ---

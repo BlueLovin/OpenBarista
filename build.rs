@@ -10,8 +10,34 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(esp_idf_comp_mdns_enabled)");
     println!("cargo::rustc-check-cfg=cfg(esp_idf_comp_espressif__mdns_enabled)");
 
+    // Detect explicit ota_enabled cfg flag via env var (esp-rs convention).
+    // rerun-if-env-changed is required, otherwise cargo keeps the previously
+    // emitted cfg flags when the env var is toggled.
+    println!("cargo:rerun-if-env-changed=CFG_OTA_ENABLED");
+    // Only truthy values enable OTA. "0"/"false"/"off" must NOT enable it:
+    // the upload endpoints are unauthenticated, and the whole safety story of
+    // this feature is that they don't exist unless explicitly opted into.
+    match std::env::var("CFG_OTA_ENABLED").as_deref() {
+        Ok("0") | Ok("false") | Ok("off") | Ok("") | Err(_) => {}
+        Ok(_) => {
+            println!("cargo:rustc-cfg=ota_enabled");
+            println!("cargo::warning=OTA upload feature ENABLED — this is a development-only mode");
+        }
+    }
+
+    // Declare cfg for ota_enabled so rustc doesn't warn
+    println!("cargo:rustc-check-cfg=cfg(ota_enabled)");
+
     println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
     println!("cargo:rerun-if-changed=.git/HEAD");
+    // HEAD alone only changes on branch switches; also watch the ref file it
+    // points at so new commits on the same branch update the Build ID even
+    // when no source file changed (e.g. docs-only commits).
+    if let Ok(head) = std::fs::read_to_string(".git/HEAD") {
+        if let Some(branch_ref) = head.trim().strip_prefix("ref: ") {
+            println!("cargo:rerun-if-changed=.git/{branch_ref}");
+        }
+    }
 
     let git_short = std::process::Command::new("git")
         .args(["rev-parse", "--short", "HEAD"])

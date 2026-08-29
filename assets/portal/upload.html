@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Firmware Upload — OpenBarista Dev Portal</title>
+    <link rel="stylesheet" href="portal.css">
+    <link rel="stylesheet" href="upload.css">
+    <script src="upload.js" defer></script>
+</head>
+<body>
+    <div class="main">
+        <h1>Firmware Upload (Dev Only)</h1>
+
+        <section class="warning" aria-live="assertive">
+            <strong>&#9888; DANGER — Firmware Reflash &#9888;</strong>
+            <p>This will overwrite the firmware on the device. NVS storage (WiFi credentials, settings) is on a separate partition and will be preserved. If the new firmware fails to boot, the device automatically rolls back to the previous version. Use only on development or test devices.</p>
+        </section>
+
+        <form id="uploadForm" method="POST" action="/api/firmware-upload">
+            <label for="firmwareFile">Select Firmware File</label>
+            <input type="file" name="firmwareFile" id="firmwareFile" accept=".bin,.BIN" required>
+            <div class="instructions">Upload a compiled OpenBarista binary (.bin) from a development build. Maximum 1.9 MB. Flashing takes up to a minute — don't power off the machine.</div>
+
+            <label>
+                I understand this is unsafe and will erase all firmware
+                <input type="checkbox" name="acknowledge_danger" required value="1">
+            </label>
+
+            <button type="submit">Flash & Reboot</button>
+        </form>
+    </div>
+</body>
+</html>
+

@@ -168,6 +168,24 @@ class MockUiState:
                 rebooting=False,
             )
 
+    def logs_payload(self) -> dict[str, object]:
+        """Mock of GET /api/logs (crash log ring) for the hidden dev panel."""
+        entries = [
+            (1, "boot #4 reset=software fw=mock"),
+            (2, "[INFO] [openbarista::wifi_provision] station connected"),
+            (3, "[INFO] [openbarista::scale_ble] scale connected: BooKoo (AA:BB:CC:DD:EE:FF)"),
+            (4, "PANIC thread=main: intentional test panic at src/main.rs:42"),
+            (5, "boot #5 reset=panic fw=mock"),
+        ]
+        return {
+            "boot_count": 5,
+            "reset_reason": "power-on",
+            "coredump_bytes": 0,
+            "entries": [
+                {"seq": seq, "line": line} for (seq, line) in entries
+            ],
+        }
+
     def scale_status_payload(self) -> dict[str, object]:
         with self.lock:
             now = time.monotonic()
@@ -360,6 +378,15 @@ class HeadlessUiHandler(BaseHTTPRequestHandler):
         if path == "/api/scale":
             self._send_json(HTTPStatus.OK, state.scale_status_payload())
             return
+        if path == "/api/logs":
+            self._send_json(HTTPStatus.OK, state.logs_payload())
+            return
+        if path == "/api/coredump":
+            self._send_json(
+                HTTPStatus.NOT_FOUND,
+                {"ok": False, "error": "No core dump stored (mock server)"},
+            )
+            return
 
         static_asset = {
             "/base.css": ("text/css; charset=utf-8", STATION_ASSETS_DIR / "base.css"),
@@ -393,6 +420,24 @@ class HeadlessUiHandler(BaseHTTPRequestHandler):
         if path == "/api/scale":
             status, payload = state.handle_scale_action(form)
             self._send_json(status, payload)
+            return
+        if path == "/api/test-panic":
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "ok": True,
+                    "message": "Mock server: a real device would panic and reboot now.",
+                },
+            )
+            return
+        if path == "/api/coredump/erase":
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "ok": True,
+                    "message": "Mock server: core dump erased (nothing was stored).",
+                },
+            )
             return
 
         self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "message": "Not found."})

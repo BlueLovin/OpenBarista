@@ -84,6 +84,73 @@ cargo run --release
 
 ---
 
+## Over-The-Air Updates (dev builds)
+
+Full OTA, crash-log and watchdog documentation lives on the
+[OTA & Crash Logging]({{ site.baseurl }}/ota-and-crash-logging/) page — including rollback behaviour, core dump analysis and troubleshooting. Summary below.
+
+Development builds can be flashed over Wi-Fi — no USB cable needed. The device
+uses a two-slot partition table (`partitions_two_ota.csv`): the upload is
+streamed into the *inactive* slot, validated by ESP-IDF, and the machine
+reboots into it. NVS (Wi-Fi credentials, settings, shot history) is preserved.
+
+If the new firmware crashes or hangs within its first ~30 seconds, the
+bootloader automatically rolls back to the previous version — a bad upload
+can't brick the machine.
+
+### One-time setup
+
+The two-slot partition table must be flashed once over USB (it can't be
+installed over the air from the old single-app layout):
+
+```sh
+cargo run   # flashes bootloader + new partition table + app
+```
+
+The app you flash now must be built with `CFG_OTA_ENABLED=1` for the upload
+page to exist:
+
+```sh
+CFG_OTA_ENABLED=1 cargo run
+```
+
+### Pushing a new firmware
+
+```sh
+# 1. Build the image
+CFG_OTA_ENABLED=1 cargo build --release
+espflash save-image --chip esp32 target/xtensa-esp32-espidf/release/openbarista firmware.bin
+
+# 2. Upload it: open http://<device-ip>/upload and pick firmware.bin
+```
+
+The flash erase takes 30–60 seconds — leave the machine powered on. The device
+reboots automatically when done.
+
+---
+
+## Crash Logs & Core Dumps
+
+When the firmware panics, the panic message, boot count and reset reason are
+persisted to NVS, and a full register/task core dump lands in the `coredump`
+flash partition. After the automatic reboot, inspect them over HTTP:
+
+| Endpoint | Purpose |
+| -------- | ------- |
+| `GET /api/logs` | Persisted event log (boots, panics, OTA events, INFO+ log lines) |
+| `GET /api/coredump` | Raw ELF core dump — analyze with `espcoredump` / gdb |
+| `POST /api/coredump/erase` | Erase the stored core dump |
+| `GET /api/diagnostics` | Reset reason, heap stats, uptime |
+
+There's also a hidden developer panel in the settings page: **click the
+Build ID five times** to reveal the log viewer (includes a "Test panic"
+button on dev builds to verify crash logging end-to-end).
+
+If the main loop ever hangs, a watchdog reboots the device after 60 seconds
+and logs the stall — no more unplugging the espresso machine.
+
+---
+
 ## Build Metadata
 
 `build.rs` exports `OPENBARISTA_BUILD_ID` using the git short SHA + epoch timestamp. This shows up in the web UI so you can tell which build is running on the device.

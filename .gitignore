@@ -1,2 +1,4 @@
 target/
 .esp/
+firmware.bin
+OTA_UPLOAD_IMPLEMENTATION_PLAN.md

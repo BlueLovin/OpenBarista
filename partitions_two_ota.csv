@@ -1,0 +1,25 @@
+# OpenBarista partition table (4 MB flash).
+#
+# Two OTA app slots so firmware can be flashed over HTTP (POST /api/firmware-upload)
+# while running from the other slot, plus a coredump partition for persistent
+# panic dumps (GET /api/coredump).
+#
+# IMPORTANT: nvs stays at offset 0x9000 with the same size as the old
+# single-app table, so WiFi credentials, settings and shot history survive
+# the first USB reflash with this table.
+#
+# App slot size: 0x1D0000 = 1,900,544 bytes (~1.81 MB) per slot.
+#
+# The 'crashlog' partition is a dedicated small NVS for the persistent event
+# ring (src/crash_log.rs). It is deliberately separate from the default 'nvs'
+# partition: the ring's blobs are rewritten constantly, and exhausting the
+# default NVS would also break Wi-Fi credential, settings and shot writes.
+#
+# Name,     Type, SubType, Offset,  Size,     Flags
+nvs,        data, nvs,     0x9000,  0x6000,
+otadata,    data, ota,     0xf000,  0x2000,
+phy_init,   data, phy,     0x11000, 0x1000,
+ota_0,      app,  ota_0,   0x20000, 0x1D0000,
+ota_1,      app,  ota_1,   ,        0x1D0000,
+coredump,   data, coredump, ,       0x30000,
+crashlog,   data, nvs,     0x3F0000, 0x10000,
