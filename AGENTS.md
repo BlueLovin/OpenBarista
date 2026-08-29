@@ -35,7 +35,7 @@ Steps: `espflash save-image` the new build, make sure the currently flashed firm
 NOTE: switching to the two-OTA partition table requires **one** final USB flash (`cargo run`); you cannot OTA from an old single-app build.
 
 ## Crash Logging & Health
-- Panic messages, boot count and reset reasons persist to NVS (`src/crash_log.rs`); panic register/task dumps persist to the `coredump` partition (ELF).
+- Panic messages, boot count and reset reasons persist to a dedicated `crashlog` NVS partition (`src/crash_log.rs`, separate from the default NVS so log rewrites can't exhaust credentials/shots storage); panic register/task dumps persist to the `coredump` partition (ELF).
 - `GET /api/logs` — persisted event ring; `GET /api/coredump` — raw ELF core dump (feed to `espcoredump`/gdb); `POST /api/coredump/erase` — reclaim it.
 - Hidden dev panel on the settings page: click the Build ID 5×.
 - Hang watchdog (`src/health.rs`): if the main loop stalls >60 s (except during OTA flash), the device logs it and reboots itself — no more unplugging the machine.

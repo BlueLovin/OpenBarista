@@ -23,21 +23,25 @@ This page covers three cooperating systems:
 ## How it fits together
 
 ```
-             ┌──────────────── 4 MB flash ────────────────┐
- bootloader   nvs      otadata   ota_0      ota_1   coredump
- (0x1000)    (0x9000) (0xf000)  (0x20000)  (0x1F0000) (0x3C0000)
-             creds,   boot       running    OTA       panic
-             shots,   selection  firmware   target    register/task
-             logs                            slot      dump (ELF)
-             └── unchanged by OTA ──┘
+             ┌──────────────────── 4 MB flash ────────────────────┐
+ bootloader   nvs      otadata   ota_0      ota_1   coredump crashlog
+ (0x1000)    (0x9000) (0xf000)  (0x20000)  (0x1F0000) (0x3C0000) (0x3F0000)
+             creds,   boot       running    OTA       panic     event
+             shots,   selection  firmware   target    register  ring
+             settings                       slot      dump (ELF)
+             └── unchanged by OTA ──┘  └─ crashlog is its own NVS partition ─┘
 ```
 
 - An OTA upload is written to the **inactive** slot only. The running image is
   never touched, so a failed/interrupted upload cannot corrupt the running
   firmware.
 - `nvs` keeps its offset from the old single-app partition table, so Wi-Fi
-  credentials, settings, shot history and the crash log all survive a
-  reflash.
+  credentials, settings and shot history survive a reflash.
+- The crash/event log gets its own small NVS partition (`crashlog`, 64 KB at
+  `0x3F0000`). Keeping it out of the default `nvs` partition means the ring's
+  constant rewrites can never exhaust or fragment the storage holding Wi-Fi
+  credentials, settings and shots. If the partition is missing (old table),
+  the log degrades to RAM-only instead of failing.
 - After a successful upload the device reboots into the new slot. The new
   image boots in *pending verify* state and has ~30 s to confirm itself
   healthy (`src/health.rs`). If it crashes, hangs or reboots before that, the
@@ -114,8 +118,8 @@ single-app table, expect a one-time full reflash.
 
 ### What gets persisted
 
-**NVS event ring** (`src/crash_log.rs`, namespace `crashlog`, 64 entries ×
-112 bytes, oldest overwritten):
+**NVS event ring** (`src/crash_log.rs`, dedicated `crashlog` NVS partition at
+0x3F0000, namespace `crashlog`, 64 entries × 112 bytes, oldest overwritten):
 
 - One `boot #N reset=<reason> fw=<build>` line per boot, with the ESP-IDF
   reset reason (`power-on`, `software`, `panic`, `brownout`, `wdt`, …)
@@ -197,6 +201,9 @@ which is how you end up unplugging the machine.
   reboots itself.
 - The same module confirms the OTA slot as valid once the firmware has been
   alive for 30 s with a live heartbeat (the rollback mechanism above).
+- Known limitation: while paused for an OTA flash, a hang *inside* the flash
+  driver itself (e.g. corrupted flash) is not caught — the upload client just
+  times out and the machine keeps running whatever was there before.
 
 ---
 
@@ -204,7 +211,7 @@ which is how you end up unplugging the machine.
 
 | File | Setting | Effect |
 | ---- | ------- | ------ |
-| `partitions_two_ota.csv` | layout | 2 × 0x1D0000 app slots, NVS @ 0x9000, coredump @ 0x3C0000 (4 MB flash) |
+| `partitions_two_ota.csv` | layout | 2 × 0x1D0000 app slots, NVS @ 0x9000, coredump @ 0x3C0000, dedicated `crashlog` NVS @ 0x3F0000 (4 MB flash) |
 | `sdkconfig.defaults` | `CONFIG_PARTITION_TABLE_CUSTOM` | use the custom table |
 | `sdkconfig.defaults` | `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` | rollback on unconfirmed images |
 | `sdkconfig.defaults` | `CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH` | persist core dumps |

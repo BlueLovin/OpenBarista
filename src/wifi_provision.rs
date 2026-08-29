@@ -175,11 +175,11 @@ struct DeviceSettings {
 fn connect_progress_json(progress: &ConnectProgress) -> String {
     format!(
         "{{\"stage\":\"{}\",\"ssid\":\"{}\",\"attempt\":{},\"total\":{},\"message\":\"{}\"}}",
-        crate::json_escape(&progress.stage),
-        crate::json_escape(&progress.ssid),
+        openbarista::json_escape(&progress.stage),
+        openbarista::json_escape(&progress.ssid),
         progress.attempt,
         progress.total,
-        crate::json_escape(&progress.message),
+        openbarista::json_escape(&progress.message),
     )
 }
 
@@ -1683,7 +1683,7 @@ fn networks_json(items: &[String]) -> String {
             out.push(',');
         }
         out.push('"');
-        out.push_str(&crate::json_escape(item));
+        out.push_str(&openbarista::json_escape(item));
         out.push('"');
     }
     out.push(']');
@@ -1702,14 +1702,14 @@ fn settings_json(
     format!(
         "{{\"ok\":{},\"message\":\"{}\",\"rebooting\":{},\"ssid\":\"{}\",\"device_label\":\"{}\",\"temperature_offset_c\":{:.3},\"ip_addr\":\"{}\",\"build_id\":\"{}\",\"board_id\":\"{}\"}}",
         if ok { "true" } else { "false" },
-        crate::json_escape(message),
+        openbarista::json_escape(message),
         if rebooting { "true" } else { "false" },
-        crate::json_escape(&settings.ssid),
-        crate::json_escape(&settings.device_label),
+        openbarista::json_escape(&settings.ssid),
+        openbarista::json_escape(&settings.device_label),
         settings.temperature_offset_c,
-        crate::json_escape(ip_addr),
-        crate::json_escape(build_id),
-        crate::json_escape(board_id),
+        openbarista::json_escape(ip_addr),
+        openbarista::json_escape(build_id),
+        openbarista::json_escape(board_id),
     )
 }
 
@@ -1765,7 +1765,7 @@ fn crash_logs_json(
     out.push_str("{\"boot_count\":");
     out.push_str(&boot_count.to_string());
     out.push_str(",\"reset_reason\":\"");
-    out.push_str(&crate::json_escape(reset_reason));
+    out.push_str(&openbarista::json_escape(reset_reason));
     out.push_str("\",\"coredump_bytes\":");
     out.push_str(&coredump_bytes.to_string());
     out.push_str(",\"entries\":[");
@@ -1775,7 +1775,7 @@ fn crash_logs_json(
         }
         out.push_str(&format!(
             "{{\"seq\":{seq},\"line\":\"{}\"}}",
-            crate::json_escape(line)
+            openbarista::json_escape(line)
         ));
     }
     out.push_str("]}");
@@ -1786,7 +1786,7 @@ fn action_result_json(ok: bool, message: &str) -> String {
     format!(
         "{{\"ok\":{},\"message\":\"{}\"}}",
         if ok { "true" } else { "false" },
-        crate::json_escape(message),
+        openbarista::json_escape(message),
     )
 }
 
@@ -1796,9 +1796,9 @@ fn scale_status_json(snapshot: &crate::scale_ble::ScaleStatusSnapshot) -> String
         |saved| {
             format!(
                 "{{\"address\":\"{}\",\"name\":\"{}\",\"addr_type\":\"{}\"}}",
-                crate::json_escape(&saved.address),
-                crate::json_escape(&saved.name),
-                crate::json_escape(&saved.addr_type),
+                openbarista::json_escape(&saved.address),
+                openbarista::json_escape(&saved.name),
+                openbarista::json_escape(&saved.addr_type),
             )
         },
     );
@@ -1810,11 +1810,11 @@ fn scale_status_json(snapshot: &crate::scale_ble::ScaleStatusSnapshot) -> String
         }
         devices_json.push_str(&format!(
             "{{\"address\":\"{}\",\"name\":\"{}\",\"address_type\":\"{}\",\"rssi\":{},\"protocol_hint\":\"{}\",\"saved\":{}}}",
-            crate::json_escape(&device.address),
-            crate::json_escape(&device.name),
-            crate::json_escape(&device.address_type),
+            openbarista::json_escape(&device.address),
+            openbarista::json_escape(&device.name),
+            openbarista::json_escape(&device.address_type),
             device.rssi,
-            crate::json_escape(&device.protocol_hint),
+            openbarista::json_escape(&device.protocol_hint),
             if device.saved { "true" } else { "false" },
         ));
     }
@@ -1828,11 +1828,11 @@ fn scale_status_json(snapshot: &crate::scale_ble::ScaleStatusSnapshot) -> String
     format!(
         "{{\"available\":{},\"state\":\"{}\",\"message\":\"{}\",\"connected_name\":\"{}\",\"connected_address\":\"{}\",\"protocol\":\"{}\",\"weight_g\":{:.3},\"flow_gps\":{:.3},\"battery_percent\":{},\"supports_manual_brew_start\":{},\"supports_flow_smoothing\":{},\"saved_scale\":{},\"devices\":{}}}",
         if snapshot.available { "true" } else { "false" },
-        crate::json_escape(&snapshot.state),
-        crate::json_escape(&snapshot.message),
-        crate::json_escape(&snapshot.connected_name),
-        crate::json_escape(&snapshot.connected_address),
-        crate::json_escape(&snapshot.protocol),
+        openbarista::json_escape(&snapshot.state),
+        openbarista::json_escape(&snapshot.message),
+        openbarista::json_escape(&snapshot.connected_name),
+        openbarista::json_escape(&snapshot.connected_address),
+        openbarista::json_escape(&snapshot.protocol),
         sanitize_telemetry_value(snapshot.weight_g),
         sanitize_telemetry_value(snapshot.flow_gps),
         battery_json,

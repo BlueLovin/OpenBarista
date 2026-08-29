@@ -61,7 +61,16 @@ fn main() -> Result<()> {
 
     // Crash log + panic hook must come first: from here on, any panic gets
     // persisted to NVS before the ESP-IDF panic handler reboots the device.
-    openbarista::crash_log::init(nvs_partition.clone(), env!("OPENBARISTA_BUILD_ID"));
+    //
+    // The crash log uses its own small NVS partition so the ring's constant
+    // rewrites can never exhaust the default NVS (Wi-Fi credentials,
+    // settings, shots). Degrades to RAM-only logging when the partition is
+    // absent (old partition table).
+    let crashlog_nvs = esp_idf_svc::nvs::EspNvsPartition::<
+        esp_idf_svc::nvs::NvsCustom,
+    >::take("crashlog")
+    .ok();
+    openbarista::crash_log::init(crashlog_nvs, env!("OPENBARISTA_BUILD_ID"));
     openbarista::crash_log::install_panic_hook();
     openbarista::crash_log::init_logger();
 
@@ -171,12 +180,26 @@ fn main() -> Result<()> {
                 openbarista::crash_log::record("ota: firmware upload started");
                 openbarista::crash_log::flush();
 
-                let expected_size = req
-                    .content_len()
-                    .unwrap_or(0)
-                    .min(openbarista::ota_flash::FIRMWARE_MAX as u64)
-                    as usize;
-                let mut writer = match OtaWriter::begin(expected_size) {
+                // Don't clamp the Content-Length: OtaWriter::begin() must see
+                // the real value so it rejects an oversized image *before*
+                // erasing the slot. A missing/zero length is rejected outright
+                // too (esp_ota_begin(0) would erase the entire partition
+                // before validation fails).
+                let content_len = req.content_len().unwrap_or(0) as usize;
+                if content_len == 0 {
+                    openbarista::health::resume_hang_monitor();
+                    openbarista::crash_log::record("ota: rejected, empty request body");
+                    openbarista::crash_log::flush();
+                    let hdrs = wifi_provision::response_headers(
+                        "application/json; charset=utf-8",
+                        "no-store",
+                    );
+                    req.into_response(400, Some("Bad Request"), &hdrs)?.write_all(
+                        b"{\"ok\":false,\"error\":\"Missing or empty request body\"}",
+                    )?;
+                    return Ok::<_, anyhow::Error>(());
+                }
+                let mut writer = match OtaWriter::begin(content_len) {
                     Ok(writer) => writer,
                     Err(err) => {
                         openbarista::health::resume_hang_monitor();
@@ -188,7 +211,7 @@ fn main() -> Result<()> {
                         );
                         let payload = format!(
                             "{{\"ok\":false,\"error\":\"{}\"}}",
-                            json_escape(&err.to_string())
+                            openbarista::json_escape(&err.to_string())
                         );
                         req.into_response(400, Some("Bad Request"), &hdrs)?
                             .write_all(payload.as_bytes())?;
@@ -245,7 +268,7 @@ fn main() -> Result<()> {
                             );
                             let payload = format!(
                                 "{{\"ok\":false,\"error\":\"{}\"}}",
-                                json_escape(&err)
+                                openbarista::json_escape(&err)
                             );
                             req.into_response(500, Some("Internal Server Error"), &hdrs)?
                                 .write_all(payload.as_bytes())?;
@@ -289,7 +312,7 @@ fn main() -> Result<()> {
                         );
                         let payload = format!(
                             "{{\"ok\":false,\"error\":\"{}\"}}",
-                            json_escape(&err.to_string())
+                            openbarista::json_escape(&err.to_string())
                         );
                         req.into_response(400, Some("Bad Request"), &hdrs)?
                             .write_all(payload.as_bytes())?;
@@ -401,23 +424,4 @@ fn drain_body(req: &mut impl esp_idf_svc::io::Read) {
             Ok(_) => {}
         }
     }
-}
-
-/// Escape a string for safe inclusion in a JSON string value.
-pub(crate) fn json_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for ch in s.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c.is_control() => {
-                out.push_str(&format!("\\u{:04x}", c as u32));
-            }
-            c => out.push(c),
-        }
-    }
-    out
 }

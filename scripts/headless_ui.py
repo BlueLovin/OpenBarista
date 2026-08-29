@@ -430,6 +430,15 @@ class HeadlessUiHandler(BaseHTTPRequestHandler):
                 },
             )
             return
+        if path == "/api/coredump/erase":
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "ok": True,
+                    "message": "Mock server: core dump erased (nothing was stored).",
+                },
+            )
+            return
 
         self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "message": "Not found."})
 

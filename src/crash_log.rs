@@ -7,7 +7,14 @@
 //!   (`GET /api/logs`).
 //! - Mirror `log` crate output (`info!`, `warn!`, ...) into that ring.
 //!
-//! Layout in NVS (namespace `crashlog`):
+//! Storage: a dedicated small NVS partition named `crashlog` (see
+//! `partitions_two_ota.csv`), *not* the default NVS partition — the ring's
+//! blobs are rewritten constantly, and exhausting the default NVS would also
+//! break Wi-Fi credential, settings and shot writes. If the partition is
+//! absent (e.g. firmware booted with an old single-app table), the log
+//! degrades to RAM-only: recording still works, persistence does not.
+//!
+//! Layout in that partition (namespace `crashlog`):
 //! - `bootcnt` — u32 boot counter (little endian blob)
 //! - `l0..l63` — ring slots, each blob = `[u64 seq][bytes...]`
 //! - `lseq`    — u64 head seq, read back at init so sequences continue
@@ -17,7 +24,9 @@
 //! NVS specifics are behind `#[cfg(target_arch = "xtensa")]`.
 
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Mutex, MutexGuard};
+#[cfg(target_arch = "xtensa")]
+use std::sync::OnceLock;
 
 /// Number of ring slots persisted to NVS.
 pub const RING_SLOTS: usize = 64;
@@ -144,7 +153,9 @@ fn unflushed_entries(state: &RingState) -> Vec<(u64, String)> {
 /// Persists all not-yet-persisted RAM entries to NVS.
 ///
 /// Only changed slots are rewritten, so NVS wear is bounded by the actual
-/// log volume.
+/// log volume; a flush with nothing pending is a no-op (this is called from
+/// `periodic_flush()` every 10 s, and rewriting unchanged blobs would wear
+/// flash and fragment the partition for no benefit).
 #[cfg(target_arch = "xtensa")]
 pub fn flush() {
     let Some(nvs) = open_nvs() else { return };
@@ -152,20 +163,33 @@ pub fn flush() {
     // Snapshot the pending entries while holding the lock, so the watermark
     // update below can never mark an entry flushed that wasn't written.
     let pending = unflushed_entries(&ring);
+    if pending.is_empty() {
+        return;
+    }
+    // Write the head sequence FIRST. If power is lost between the head and
+    // the entry writes, the next boot only loses the entries that hadn't
+    // been written yet (inherent). Writing it *last* instead would leave a
+    // stale head on disk; the next boot would then reuse seq numbers that
+    // are already persisted, and the `seq > persisted_max` merge in
+    // [`all_entries`] would hide the new boot's early lines until the
+    // sequence caught up.
+    if let Err(err) = nvs.set_blob(KEY_HEAD_SEQ, &ring.next_seq.to_le_bytes()) {
+        println!("[crashlog] NVS head write failed: {err:?}");
+        return;
+    }
     for (seq, line) in &pending {
         let key = format!("l{}", seq % RING_SLOTS as u64);
         let mut blob = Vec::with_capacity(8 + line.len());
         blob.extend_from_slice(&seq.to_le_bytes());
         blob.extend_from_slice(line.as_bytes());
         if let Err(err) = nvs.set_blob(&key, &blob) {
-            // Never panic from the logging path.
+            // Never panic from the logging path. The head is already
+            // advanced, so the affected entries are lost across a reboot;
+            // flushed_seq is deliberately NOT updated, so they stay pending
+            // and are retried if this boot survives.
             println!("[crashlog] NVS write failed: {err:?}");
             return;
         }
-    }
-    if let Err(err) = nvs.set_blob(KEY_HEAD_SEQ, &ring.next_seq.to_le_bytes()) {
-        println!("[crashlog] NVS head write failed: {err:?}");
-        return;
     }
     ring.flushed_seq = ring.next_seq;
 }
@@ -179,7 +203,7 @@ pub fn flush() {
 /// Throttled flush: persists at most once every [`FLUSH_INTERVAL`], meant to
 /// be called from the main loop.
 pub fn periodic_flush() {
-    let now = uptime_secs();
+    let now = crate::util::uptime_secs();
     let last = LAST_FLUSH_SECS.load(Ordering::Relaxed);
     if now < last || u64::from(now.saturating_sub(last)) < FLUSH_INTERVAL.as_secs() {
         return;
@@ -204,24 +228,30 @@ pub fn boot_count() -> u32 {
     0
 }
 
-/// ESP32 reset reasons, mapped to stable labels.
+/// ESP32 reset reasons, mapped to stable labels. Uses the ESP-IDF
+/// `ESP_RST_*` constants rather than raw numbers so the mapping can't drift
+/// across IDF versions.
 pub fn reset_reason_label() -> &'static str {
     #[cfg(target_arch = "xtensa")]
     {
-        let reason = unsafe { esp_idf_svc::sys::esp_reset_reason() } as u32;
+        use esp_idf_svc::sys as sys;
+        let reason = unsafe { sys::esp_reset_reason() };
         match reason {
-            1 => "power-on",
-            2 => "external-pin",
-            3 => "software",
-            4 => "panic",
-            5 => "interrupt-wdt",
-            6 => "task-wdt",
-            7 => "wdt",
-            8 => "deep-sleep",
-            9 => "brownout",
-            10 => "sdio",
-            11..=16 => "usb",
-            17 => "efuse",
+            sys::esp_reset_reason_t_ESP_RST_POWERON => "power-on",
+            sys::esp_reset_reason_t_ESP_RST_EXT => "external-pin",
+            sys::esp_reset_reason_t_ESP_RST_SW => "software",
+            sys::esp_reset_reason_t_ESP_RST_PANIC => "panic",
+            sys::esp_reset_reason_t_ESP_RST_INT_WDT => "interrupt-wdt",
+            sys::esp_reset_reason_t_ESP_RST_TASK_WDT => "task-wdt",
+            sys::esp_reset_reason_t_ESP_RST_WDT => "wdt",
+            sys::esp_reset_reason_t_ESP_RST_DEEPSLEEP => "deep-sleep",
+            sys::esp_reset_reason_t_ESP_RST_BROWNOUT => "brownout",
+            sys::esp_reset_reason_t_ESP_RST_SDIO => "sdio",
+            sys::esp_reset_reason_t_ESP_RST_USB => "usb",
+            sys::esp_reset_reason_t_ESP_RST_JTAG => "jtag",
+            sys::esp_reset_reason_t_ESP_RST_EFUSE => "efuse",
+            sys::esp_reset_reason_t_ESP_RST_PWR_GLITCH => "power-glitch",
+            sys::esp_reset_reason_t_ESP_RST_CPU_LOCKUP => "cpu-lockup",
             _ => "unknown",
         }
     }
@@ -234,8 +264,9 @@ pub fn reset_reason_label() -> &'static str {
 /// Initializes the crash log and records a boot entry.
 ///
 /// Must be called once at startup, *before* any thread that could panic.
-/// The default NVS partition is moved in (not re-taken) because `main`
-/// already owns it.
+/// `nvs_partition` is the dedicated `crashlog` NVS partition (`None` when the
+/// partition doesn't exist, e.g. an old partition table — the log then
+/// degrades to RAM-only).
 /// Reads the persisted head sequence (`lseq`) back from NVS so that the
 /// in-RAM sequence keeps increasing across reboots. Without this, every boot
 /// would restart at seq 0 and (a) the merge in [`all_entries`] would hide the
@@ -252,7 +283,16 @@ fn persisted_head_seq() -> u64 {
 }
 
 #[cfg(target_arch = "xtensa")]
-pub fn init(nvs_partition: esp_idf_svc::nvs::EspDefaultNvsPartition, build_id: &str) {
+pub fn init(
+    nvs_partition: Option<esp_idf_svc::nvs::EspCustomNvsPartition>,
+    build_id: &str,
+) {
+    if nvs_partition.is_none() {
+        println!(
+            "[crashlog] 'crashlog' NVS partition not found — crash log will be RAM-only \
+             (requires the two-slot partition table)"
+        );
+    }
     if XTENSA_NVS_PARTITION.set(nvs_partition).is_err() {
         println!("[crashlog] already initialized");
     }
@@ -278,7 +318,7 @@ pub fn init(nvs_partition: esp_idf_svc::nvs::EspDefaultNvsPartition, build_id: &
 
 /// Host test no-op.
 #[cfg(not(target_arch = "xtensa"))]
-pub fn init(_unused: (), build_id: &str) {
+pub fn init(_nvs: Option<()>, build_id: &str) {
     record(&format!("boot reset={} fw={build_id}", reset_reason_label()));
     flush();
 }
@@ -339,20 +379,15 @@ pub fn install_panic_hook() {
     }));
 }
 
-fn uptime_secs() -> u32 {
-    static START: OnceLock<std::time::Instant> = OnceLock::new();
-    let start = START.get_or_init(std::time::Instant::now);
-    start.elapsed().as_secs() as u32
-}
-
 // --- ESP-IDF specific plumbing ------------------------------------------------
 
 #[cfg(target_arch = "xtensa")]
-static XTENSA_NVS_PARTITION: OnceLock<esp_idf_svc::nvs::EspDefaultNvsPartition> = OnceLock::new();
+static XTENSA_NVS_PARTITION: OnceLock<Option<esp_idf_svc::nvs::EspCustomNvsPartition>> =
+    OnceLock::new();
 
 #[cfg(target_arch = "xtensa")]
-fn open_nvs() -> Option<esp_idf_svc::nvs::EspNvs<esp_idf_svc::nvs::NvsDefault>> {
-    let part = XTENSA_NVS_PARTITION.get()?;
+fn open_nvs() -> Option<esp_idf_svc::nvs::EspNvs<esp_idf_svc::nvs::NvsCustom>> {
+    let part = XTENSA_NVS_PARTITION.get().and_then(|opt| opt.as_ref())?;
     match esp_idf_svc::nvs::EspNvs::new(part.clone(), NVS_NAMESPACE, true) {
         Ok(nvs) => Some(nvs),
         Err(err) => {

@@ -7,3 +7,6 @@ pub mod shot_store;
 pub mod sync_utils;
 pub mod telemetry_feed;
 pub mod telemetry_math;
+pub mod util;
+
+pub use util::json_escape;

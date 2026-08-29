@@ -14,9 +14,15 @@ fn main() {
     // rerun-if-env-changed is required, otherwise cargo keeps the previously
     // emitted cfg flags when the env var is toggled.
     println!("cargo:rerun-if-env-changed=CFG_OTA_ENABLED");
-    if let Ok(_val) = std::env::var("CFG_OTA_ENABLED") {
-        println!("cargo:rustc-cfg=ota_enabled");
-        println!("cargo::warning=OTA upload feature ENABLED — this is a development-only mode");
+    // Only truthy values enable OTA. "0"/"false"/"off" must NOT enable it:
+    // the upload endpoints are unauthenticated, and the whole safety story of
+    // this feature is that they don't exist unless explicitly opted into.
+    match std::env::var("CFG_OTA_ENABLED").as_deref() {
+        Ok("0") | Ok("false") | Ok("off") | Ok("") | Err(_) => {}
+        Ok(_) => {
+            println!("cargo:rustc-cfg=ota_enabled");
+            println!("cargo::warning=OTA upload feature ENABLED — this is a development-only mode");
+        }
     }
 
     // Declare cfg for ota_enabled so rustc doesn't warn

@@ -14,8 +14,15 @@
 //!    [`CONFIRM_AFTER`], the running slot is marked valid. If it instead
 //!    crashes/reboots before that, the bootloader rolls back to the
 //!    previous slot automatically.
+//!
+//! Known limitation: while the monitor is paused (OTA flash), a hang inside
+//! the flash driver itself (e.g. corrupted flash) is not caught — the upload
+//! client just times out. Considered acceptable; see
+//! `docs/ota-and-crash-logging.md`.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
+use crate::util::uptime_secs;
 
 /// How long the heartbeat may be silent before the monitor restarts the
 /// device. Generous enough to ride out sensor/BLE hiccups.
@@ -28,13 +35,6 @@ pub const CONFIRM_AFTER: std::time::Duration = std::time::Duration::from_secs(30
 static LAST_FEED_SECS: AtomicU32 = AtomicU32::new(0);
 static PAUSED: AtomicBool = AtomicBool::new(false);
 static CONFIRMED: AtomicBool = AtomicBool::new(false);
-
-fn uptime_secs() -> u32 {
-    use std::sync::OnceLock;
-    static START: OnceLock<std::time::Instant> = OnceLock::new();
-    let start = START.get_or_init(std::time::Instant::now);
-    start.elapsed().as_secs() as u32
-}
 
 /// Records a heartbeat. Call from the main loop.
 pub fn feed() {
